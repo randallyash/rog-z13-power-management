@@ -32,6 +32,9 @@ project exists**.
 - **2025 ASUS ROG Flow Z13 (GZ302)** — these are laptop-specific values
 - Arch Linux / CachyOS with KDE Plasma 6
 - AUR: [`z13ctl-bin`](https://github.com/dahui/z13ctl) (required)
+- AUR conflicts: if you already run a `z13ctl`/`z13gui` variant (e.g.
+  `z13ctl-plus-bin`), pacman will offer to swap it for `z13ctl-bin`/`z13gui-bin`
+  — that's expected and safe (they can't coexist; see Install)
 - AUR: [`z13gui-bin`](https://github.com/dahui/z13gui) (optional — for `toggle`)
 - `ryzen_smu` kernel module (optional — needed only for undervolt; without it
   `z13-power` warns and skips the undervolt step)
@@ -41,8 +44,24 @@ project exists**.
 
 **Recommended — packaged (scripts land in `/usr/bin`):**
 
+First add Fifthdread's package repo to paru — one command (adds + syncs):
+
 ```bash
-paru -S z13-power-git        # from Fifthdread's pkgbuild repo
+curl -fsSL https://5d.fyi/addrepo | bash
+```
+
+Prefer not to run a script? Add the repo by hand, then sync:
+
+```bash
+mkdir -p ~/.config/paru && printf '[fifthdread]\nUrl = https://forgejo.fifthdread.com/Fifthdread/pkgbuilds.git\nGenerateSrcinfo\nSkipReview\n' >> ~/.config/paru/paru.conf
+paru -Sy --pkgbuilds
+```
+
+**The sync step is required** — without it `paru -S` won't know about
+`z13-power-git`. Then install:
+
+```bash
+paru -S z13-power-git
 z13-power-config             # deploy the KDE PowerDevil hooks
 ```
 
