@@ -2,8 +2,9 @@
 #
 # install.sh — ROG Flow Z13 power management setup
 #
-# Installs the z13-power profile manager, enables the z13ctl daemon stack,
-# and deploys the KDE PowerDevil automation (AC/Battery/LowBattery -> modes).
+# Installs the z13-power profile manager + the z13-power-service tray/watcher
+# (which owns all power profile switching), enables the z13ctl daemon stack,
+# and deploys the KDE PowerDevil display settings.
 #
 # Requirements:
 #   - 2025 ASUS ROG Flow Z13 (GZ302)
@@ -53,13 +54,31 @@ if ! id -nG | tr ' ' '\n' | grep -qw users; then
   WARN "  Run: sudo usermod -aG users \"$USER\"   then log out and back in."
 fi
 
-# ── 1. Install the profile manager ─────────────────────────────────────────────
+# ── 1. Install the profile manager + tray service ─────────────────────────────
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cp "$SCRIPT_DIR/scripts/z13-power" "$BIN_DIR/z13-power"
 chmod +x "$BIN_DIR/z13-power"
-OK "Installed z13-power to $BIN_DIR"
+cp "$SCRIPT_DIR/service/z13-power-service" "$BIN_DIR/z13-power-service"
+chmod +x "$BIN_DIR/z13-power-service"
+OK "Installed z13-power + z13-power-service to $BIN_DIR"
+
+if ! python3 -c "import PyQt6, pyudev" >/dev/null 2>&1; then
+  WARN "z13-power-service needs python-pyqt6 + pyudev — install: paru -S python-pyqt6 python-pyudev"
+fi
+if ! command -v notify-send >/dev/null 2>&1; then
+  WARN "z13-power-service notifications need notify-send (libnotify)"
+fi
+
+UNIT_DIR="$HOME/.config/systemd/user"
+mkdir -p "$UNIT_DIR"
+sed "s|/usr/bin/z13-power-service|$BIN_DIR/z13-power-service|" \
+  "$SCRIPT_DIR/service/z13-power-service.service" > "$UNIT_DIR/z13-power-service.service"
+systemctl --user daemon-reload
+systemctl --user enable --now z13-power-service.service 2>/dev/null || \
+  WARN "Could not enable z13-power-service — start it with: systemctl --user start z13-power-service"
+OK "Enabled z13-power-service (tray icon + power watcher)"
 
 # ── 2. z13ctl device permissions (udev rules + perms service) ─────────────────
 if [[ ! -f /etc/udev/rules.d/99-z13ctl.rules ]]; then
@@ -85,18 +104,15 @@ else
   OK "Touchpad DWT fix already present"
 fi
 
-# ── 5. Deploy KDE PowerDevil automation ───────────────────────────────────────
+# ── 5. Deploy KDE PowerDevil display settings ─────────────────────────────────
 if [[ -d "$HOME/.config" ]]; then
   TARGET="$HOME/.config/powerdevilrc"
   if [[ -f "$TARGET" ]]; then
     cp "$TARGET" "$TARGET.bak.$(date +%Y%m%d%H%M%S)"
     OK "Backed up existing $TARGET"
   fi
-  sed "s|%BIN%|$BIN_DIR|g" "$SCRIPT_DIR/kde/powerdevilrc" > "$TARGET"
-  OK "Deployed KDE PowerDevil automation to $TARGET"
-  INFO "  AC          -> z13-power performance"
-  INFO "  Battery     -> z13-power balanced"
-  INFO "  Low Battery -> z13-power silent"
+  cp "$SCRIPT_DIR/kde/powerdevilrc" "$TARGET"
+  OK "Deployed KDE PowerDevil display settings to $TARGET"
 else
   ERR "No ~/.config directory — this needs to run as your normal desktop user."
 fi
@@ -106,12 +122,13 @@ cat <<'EOF'
 
 === DONE ===
 
-Remaining manual steps (KDE GUI):
+Remaining manual steps:
   1. If you're in the 'users' group (or were just added), log out and back in.
-  2. System Settings -> Power Management -> verify the three "Run Script"
-     actions under AC / Battery / Low Battery profiles.
-  3. (Optional) For the Meta+B overlay toggle button: add a global shortcut
-     or panel button that runs  ~/.local/bin/z13-power toggle  (requires z13gui).
+  2. The tray icon should be in the system tray — click it to switch profiles.
+     Profile switching (AC -> performance, battery -> balanced, low -> silent)
+     is handled automatically by z13-power-service.
+  3. (Optional) For a quick toggle without the tray: ~/.local/bin/z13-power toggle
+     toggles the z13gui overlay drawer (requires z13gui).
 
 To verify: run  ~/.local/bin/z13-power status
 EOF

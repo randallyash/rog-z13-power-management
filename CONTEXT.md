@@ -5,20 +5,24 @@ when working in this repo. Human-facing docs live in README.md (Forgejo page).
 
 ## Purpose
 
-Automate power profile switching on a 2025 ASUS ROG Flow Z13 (GZ302) via KDE
-PowerDevil "Run Script" hooks. One `z13-power` script wraps `z13ctl` (AUR
-`z13ctl-bin`, github dahui/z13ctl). Hand-off repo for a friend — values are the
-original owner's per-unit tuning. Packaged as `z13-power-git` in the pkgbuilds
-repo. License: GPL-3.0-or-later.
+Automate power profile switching on a 2025 ASUS ROG Flow Z13 (GZ302). Two
+components:
+- `z13-power` — CLI modes wrapping `z13ctl` (AUR `z13ctl-bin`, github dahui/z13ctl)
+- `z13-power-service` — PyQt6 system tray app + power profile watcher that OWNS
+  all profile switching (login, AC/battery transitions, low battery, notifications)
+
+KDE PowerDevil Run Script hooks are intentionally NOT used. Hand-off repo for a
+friend; values are the original owner's per-unit tuning. Packaged as
+`z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
 
 ## Layout
 
-- `scripts/z13-power` — the single CLI (7 subcommand modes)
-- `kde/powerdevilrc` — PowerDevil template; `%BIN%` placeholder (install.sh →
-  `$HOME/.local/bin`, package helper → `/usr/bin`)
-- `contrib/z13-power-config` — packaged helper that deploys the KDE hooks
+- `scripts/z13-power` — mode CLI (applies profiles SILENTLY; no notifications)
+- `service/z13-power-service` — tray + watcher (PyQt6): the only notifier
+- `service/z13-power-service.service` — systemd user unit (graphical-session.target)
+- `contrib/z13-power-config` — deploys display-only powerdevilrc
+- `kde/powerdevilrc` — display/DPMS-only template (no RunScript hooks)
 - `install.sh` — from-source installer (fallback; package is preferred)
-- `CONTEXT.md` — this file: agent knowledge, committed for anyone working on the repo
 - `LICENSE` — GPL-3.0-or-later
 
 ## Mode → z13ctl mapping
@@ -33,59 +37,64 @@ repo. License: GPL-3.0-or-later.
 | status | prints profile/tdp/fancurve/undervolt |
 | toggle | `systemctl --user` start/stop of `z13gui.service` |
 
-TDP arg order: `--pl1 PL1 --pl2 PL2 --pl3 PL3`. README table lists
-PL1/PL2/PL3 only; scripts don't pass APU/Platform sPPT.
+TDP arg order: `--pl1 PL1 --pl2 PL2 --pl3 PL3`. UV steps skip gracefully when
+`ryzen_smu` module is absent.
 
-UV steps skip gracefully when `ryzen_smu` module is absent (warn to stderr,
-return 0). `toggle` errors out if the z13gui unit is missing (checked via
-`systemctl --user list-unit-files | grep` — list-unit-files alone returns 0
-even for nonexistent units).
+## Service behavior
 
-Profile modes fire a KDE notification via `notify-send` (optdepends
-`libnotify`) when applied — no-op if notify-send is absent, guarded with
-`|| true` so a missing notification daemon never aborts a switch (set -e).
+- **Tray menu**: 5 modes, current checked; manual pick sets `override=True`
+  (stands until the power SOURCE changes).
+- **Power source change** (udev `power_supply` event, plus 30s safety poll):
+  clears override → apply performance (AC) / balanced (battery).
+- **Low battery** (capacity <= `low_battery` from `~/.config/z13-power/service.conf`,
+  default 15): latches `silent` even over a manual pick; released above threshold.
+- **Startup**: applies the profile for the current power source.
+- **3s profile poll**: `z13_sig()` = `z13ctl profile --get` label + TDP PL1.
+  If it changes externally (overlay/terminal/button) → notify + treat as override.
+  Signature needed because `profile --get` returns the active custom-profile
+  label (e.g. "custom") even when the platform profile changed.
+- **Notifications**: `notify-send` on every switch + external change. Single
+  notifier — `z13-power` itself is silent.
+- Service PATH (systemd) does NOT include `~/.local/bin` — resolves z13-power
+  from `/usr/bin` (packaged).
 
 ## Automation topology (original machine)
 
-- **KDE PowerDevil** (`~/.config/powerdevilrc`):
-  - `[AC][RunScript]` → `z13-power performance`
-  - `[Battery][RunScript]` → `z13-power balanced`
-  - `[LowBattery][RunScript]` → `z13-power silent`
-- **Panel button** (Meta+B, `com.github.configurable_button` applet in
-  `plasma-org.kde.plasma.desktop-appletsrc`) → `z13-power toggle` — NOT shipped
-  as a panel config (containment IDs are user-specific); documented as manual.
-- **User systemd units** (from AUR): `z13ctl.service` (daemon), `z13ctl.socket`,
-  `z13gui.service` — enabled, running.
+- **z13-power-service** (user unit, graphical-session) — owns all switching.
+- **PowerDevil** `~/.config/powerdevilrc` — display/DPMS settings ONLY; the
+  `[X][RunScript]` hooks were removed (commit-era; see git history).
+- **Panel button** (Meta+B, `com.github.configurable_button` applet) → runs
+  `z13-power toggle` (z13gui overlay). NOT shipped; containment IDs user-specific.
+- **User systemd units**: `z13ctl.service` (daemon), `z13ctl.socket`,
+  `z13gui.service`, `z13-power-service.service`.
 - **System**: `z13ctl-perms.service` + `/etc/udev/rules.d/99-z13ctl.rules`
-  (both generated by `sudo z13ctl setup`), plus `99-rog-z13-touchpad.rules`
-  (from rog-z13-trackpad-fix repo), `99-z13gui-gamepad.rules` (from z13gui pkg).
+  (generated by `sudo z13ctl setup`), plus `99-rog-z13-touchpad.rules`
+  (rog-z13-trackpad-fix), `99-z13gui-gamepad.rules` (z13gui pkg).
 
 ## Conflict rules (the important gotchas)
 
-- **z13ctl `autoswitch` must stay OFF.** Both autoswitch and PowerDevil fire on
-  power-source change → race (last writer wins). This project uses PowerDevil.
-- **KDE per-state power profiles must stay unset** (`[AC][Profile]` etc.). KDE
-  would write `platform_profile` and fight z13-power.
-- z13ctl daemon is required for TDP/fancurve/undervolt persistence. The Armoury
-  Crate button watcher (default on in daemon) is manual, not a conflict.
-- z13ctl's autoswitch only supports AC/battery; the **LowBattery tier is the
-  reason this project exists** (PowerDevil's third state).
+- **z13ctl `autoswitch` must stay OFF** — it races the service on power changes.
+- **KDE per-state power profiles must stay unset** — KDE would write
+  `platform_profile` and fight the service.
+- z13ctl daemon required for TDP/fancurve/undervolt persistence. Armoury Crate
+  button watcher (daemon) is manual, not a conflict.
+- Notifications are the service's job — don't re-add notify() to z13-power or
+  you get double popups.
 
 ## Device specifics
 
 - USB VID:PID `0b05:18c6` (keyboard/RGB HID) and `0b05:1a30` (folio).
-- `ryzen_smu` kernel module required for undervolt (`z13ctl undervolt`).
-  Module: `ryzen_smu_drv` (check `/proc/modules`). AUR `ryzen_smu-dkms-git`
-  (amkillam fork).
+- `ryzen_smu` kernel module required for undervolt. Module: `ryzen_smu_drv`.
+  AUR `ryzen_smu-dkms-git` (amkillam fork).
 - Sysfs perms: `users` group membership required (z13ctl setup + perms service).
 
 ## Packaging
 
-- PKGBUILD `z13-power-git` lives in the `pkgbuilds` repo (paru custom source).
-- package(): installs `scripts/z13-power` + `contrib/z13-power-config` +
-  `kde/powerdevilrc` to `/usr/share/z13-power-management/`, symlinks
-  `/usr/bin/z13-power` + `/usr/bin/z13-power-config`, LICENSE to /usr/share/licenses.
-- `z13-power-config` seds `%BIN%` → `/usr/bin`; install.sh seds → `$HOME/.local/bin`.
+- PKGBUILD `z13-power-git` in the `pkgbuilds` repo (paru custom source).
+- depends: `z13ctl-bin python-pyqt6 python-pyudev libnotify`; optdepends:
+  `z13gui-bin`, `ryzen_smu-dkms-git`.
+- package(): installs z13-power, z13-power-service + `/usr/lib/systemd/user/`
+  unit, z13-power-config, powerdevilrc, LICENSE.
 
 ## Per-unit tuning caveat
 
@@ -95,7 +104,5 @@ original unit. The bud may need to adjust the `silent` / `lowpower` modes in
 
 ## Related projects
 
-- `rog-z13-trackpad-fix` (Forgejo, same forge) — companion; enables touchpad
-  DWT. Referenced, not bundled.
-- `z13ctl` / `z13gui` upstream: github.com/dahui — AUR `z13ctl-bin`,
-  `z13gui-bin`.
+- `rog-z13-trackpad-fix` (Forgejo, same forge) — companion; enables touchpad DWT.
+- `z13ctl` / `z13gui` upstream: github.com/dahui — AUR `z13ctl-bin`, `z13gui-bin`.

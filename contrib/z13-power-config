@@ -1,9 +1,12 @@
 #!/bin/bash
 #
-# z13-power-config — deploy the packaged KDE PowerDevil automation config.
+# z13-power-config — deploy the packaged KDE PowerDevil config (display/DPMS only).
 #
-# Writes ~/.config/powerdevilrc from the system template (/usr/share/z13-power-management/powerdevilrc),
-# backing up any existing file. Replaces the %BIN% placeholder with /usr/bin.
+# Writes ~/.config/powerdevilrc from the system template
+# (/usr/share/z13-power-management/powerdevilrc), backing up any existing file.
+#
+# Power profile switching is handled by the z13-power-service tray app, not by
+# KDE Run Script hooks — nothing else needs configuring in KDE.
 #
 # Usage:  z13-power-config
 
@@ -18,12 +21,10 @@ if [[ -f "$TARGET" ]]; then
   cp "$TARGET" "$TARGET.bak.$(date +%Y%m%d%H%M%S)"
   echo "Backed up $TARGET"
 fi
-sed "s|%BIN%|/usr/bin|g" "$SRC" > "$TARGET"
+cp "$SRC" "$TARGET"
 cat <<'EOF'
-Deployed KDE PowerDevil hooks to ~/.config/powerdevilrc:
-  AC          -> /usr/bin/z13-power performance
-  Battery     -> /usr/bin/z13-power balanced
-  Low Battery -> /usr/bin/z13-power silent
+Deployed KDE PowerDevil display/DPMS settings to ~/.config/powerdevilrc.
 
-Log out and back in, then verify with:  z13-power status
+Profile switching is owned by the z13-power tray service — enable it with:
+  systemctl --user enable --now z13-power-service
 EOF

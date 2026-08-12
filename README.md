@@ -4,15 +4,18 @@ Automated power profile switching for the **2025 ASUS ROG Flow Z13 (GZ302)**.
 Plug in → performance mode. Unplug → balanced. Low battery → silent.
 Undervolt and TDP power limits ride along automatically.
 
-Built on [z13ctl](https://github.com/dahui/z13ctl) and driven by **KDE Plasma's
-PowerDevil** — no extra daemon, no autoswitch config, just a single `z13-power`
-command hooked into the power states you already have in System Settings.
+Built on [z13ctl](https://github.com/dahui/z13ctl). A single **system tray
+service** (`z13-power-service`) owns all profile switching: it applies the right
+profile at login, on power-source changes, and on low battery, gives you a tray
+menu to switch profiles manually, and pops a KDE notification on every switch.
+No KDE "Run Script" hooks, no PowerDevil configuration, no autoswitch config —
+works on any desktop.
 
 ## What it does
 
-One command, seven modes (`z13-power <mode>`):
+One command, seven modes (`z13-power <mode>`), plus a tray app:
 
-| Mode | Profile | TDP (W) | Undervolt | Wired to |
+| Mode | Profile | TDP (W) | Undervolt | Used for |
 |------|---------|---------|-----------|----------|
 | `performance` | performance | 75 / 75 / 93 / 93 | reset | **AC** |
 | `balanced` | balanced | 52 / 71 / 70 | reset | **Battery** |
@@ -20,27 +23,31 @@ One command, seven modes (`z13-power <mode>`):
 | `max` | performance | 93 forced | reset | manual |
 | `lowpower` | quiet | 5 | -25 mV | manual |
 | `status` | — | shows current state | — | manual |
-| `toggle` | — | toggles z13gui overlay drawer | — | manual / shortcut |
+| `toggle` | — | toggles z13gui overlay drawer | — | manual |
 
-The three wired entries fire automatically on power-source changes via KDE
-PowerDevil (the same screen where you set display idle timeouts). z13ctl's own
-`autoswitch` can only do AC/battery — the **Low Battery tier is the reason this
-project exists**.
+`z13-power-service` (system tray):
+- **Tray icon + menu** — switch profiles manually, current one marked
+- **Login** — applies the profile for the current power source immediately
+- **AC / battery** — switches `performance` ↔ `balanced` on plug/unplug
+- **Low battery** — forces `silent` below a threshold (default 15%, configurable)
+- **Notifications** — KDE popup on every switch, and when a profile is changed
+  from outside the service (overlay, terminal, Armoury Crate button)
+
+The low-battery tier is the reason this project exists — z13ctl's own autoswitch
+only supports AC/battery.
 
 ## Requirements
 
 - **2025 ASUS ROG Flow Z13 (GZ302)** — these are laptop-specific values
 - Arch Linux / CachyOS with KDE Plasma 6
 - AUR: [`z13ctl-bin`](https://github.com/dahui/z13ctl) (required)
-- AUR conflicts: if you already run a `z13ctl`/`z13gui` variant (e.g.
-  `z13ctl-plus-bin`), pacman will offer to swap it for `z13ctl-bin`/`z13gui-bin`
-  — that's expected and safe (they can't coexist; see Install)
+- `python-pyqt6`, `python-pyudev`, `libnotify` (required — tray service + notifications)
 - AUR: [`z13gui-bin`](https://github.com/dahui/z13gui) (optional — for `toggle`)
 - `ryzen_smu` kernel module (optional — needed only for undervolt; without it
   `z13-power` warns and skips the undervolt step)
-- [rog-z13-trackpad-fix](https://forgejo.fifthdread.com/Fifthdread/rog-z13-trackpad-fix) (optional — enables "Disable While Typing")
-- `notify-send` / `libnotify` (optional — KDE notification on profile switch;
-  `z13-power` stays silent if it's missing)
+- AUR conflicts: if you already run a `z13ctl`/`z13gui` variant (e.g.
+  `z13ctl-plus-bin`), pacman will offer to swap it for `z13ctl-bin`/`z13gui-bin`
+  — that's expected and safe (they can't coexist; see Install)
 
 ## Install
 
@@ -64,7 +71,8 @@ paru -Sy --pkgbuilds
 
 ```bash
 paru -S z13-power-git
-z13-power-config             # deploy the KDE PowerDevil hooks
+z13-power-config             # deploy KDE display/DPMS settings (optional)
+systemctl --user enable --now z13-power-service
 ```
 
 **Or from source:**
@@ -77,43 +85,42 @@ cd rog-z13-power-management
 
 Either path:
 1. Checks dependencies (`z13ctl`, `z13gui`, `ryzen_smu`, `users` group)
-2. Installs `z13-power` (to `/usr/bin` or `~/.local/bin`)
+2. Installs `z13-power` + `z13-power-service` (to `/usr/bin` or `~/.local/bin`)
 3. Runs `sudo z13ctl setup` (udev rules + sysfs permission service) if needed
-4. Enables the `z13ctl` daemon + socket (and `z13gui` if present)
-5. Deploys the PowerDevil config (backing up yours)
-6. Reminds you of the manual steps below
+4. Enables the `z13ctl` daemon + socket and the `z13-power-service` tray app
+5. Deploys the PowerDevil display settings (backing up yours)
 
-Then **log out and back in**, and verify:
+Then **log out and back in** (for group changes), and verify:
 
 ```bash
 z13-power status
+systemctl --user status z13-power-service
 ```
 
-## Manual steps (KDE GUI)
+A tray icon should appear — click it to switch profiles manually.
 
-1. **Log out / back in** after group changes (`users` group for device access).
-2. **System Settings → Power Management** — the three "Run Script" actions
-   (AC / Battery / Low Battery) should be present. If not, add them:
-   - AC: `z13-power performance`
-   - Battery: `z13-power balanced`
-   - Low Battery: `z13-power silent`
-3. **(Optional) Meta+B overlay toggle** — a shortcut or panel button running
-   `z13-power toggle` (requires `z13gui-bin`).
+## Configuration
+
+`~/.config/z13-power/service.conf`:
+
+```ini
+[service]
+low_battery = 15
+```
 
 ## Caveats
 
 - **Undervolt is silicon lottery.** `-20`/`-25` mV worked on one unit; if the
   bud's Z13 is unstable (crashes under load), raise or remove the undervolt
   lines in the `silent` / `lowpower` modes of `scripts/z13-power`.
-- **Don't use z13ctl's built-in autoswitch.** `z13ctl autoswitch` and KDE
-  PowerDevil would both fire on power changes and race each other. Pick one —
-  this project uses PowerDevil, so leave autoswitch off:
-  `z13ctl autoswitch --clear`
+- **Don't use z13ctl's built-in autoswitch.** `z13ctl autoswitch` and the tray
+  service would both fire on power changes and race each other. Leave autoswitch
+  off: `z13ctl autoswitch --clear`
 - **Don't set KDE's own per-state power profiles** (System Settings → Power
-  Management → "Performance"). PowerDevil would then write `platform_profile`
-  directly and fight `z13-power`.
-- The `max` / `lowpower` modes are manual (run from a terminal or shortcut) —
-  they are not wired into any power state.
+  Management → "Performance"). KDE would write `platform_profile` directly and
+  fight the service.
+- The `max` / `lowpower` modes are manual (tray menu or terminal) — they are not
+  wired into any power state.
 - Requires the z13ctl **daemon** running for TDP/fancurve/undervolt persistence.
   Check with `systemctl --user status z13ctl`.
 
@@ -122,11 +129,14 @@ z13-power status
 ```
 ├── install.sh              # from-source installer (deps, units, config deploy)
 ├── scripts/
-│   └── z13-power           # the whole thing: 7 modes in one script
+│   └── z13-power           # the mode CLI: 7 modes in one script
+├── service/
+│   ├── z13-power-service   # tray icon + power profile watcher (PyQt6)
+│   └── z13-power-service.service   # systemd user unit
 ├── contrib/
-│   └── z13-power-config    # packaged helper: deploys KDE hooks from the package
+│   └── z13-power-config    # packaged helper: deploys KDE display settings
 ├── kde/
-│   └── powerdevilrc        # PowerDevil config template (%BIN% substituted)
+│   └── powerdevilrc        # display/DPMS-only PowerDevil template
 ├── LICENSE                 # GPL-3.0-or-later
 └── CONTEXT.md              # agent knowledge (local, not for the Forgejo page)
 ```

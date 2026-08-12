@@ -1,32 +1,12 @@
-# KDE Plasma 6 PowerDevil profile — ROG Flow Z13 power automation.
-#
-# This file maps power states to z13-power modes. install.sh (or the packaged
-# z13-power-config helper) copies it into ~/.config/powerdevilrc, replacing %BIN%
-# with the directory containing z13-power ($HOME/.local/bin or /usr/bin).
-#
-# IMPORTANT: Do NOT set [AC][Profile] / [Battery][Profile] in KDE's own power
-# management. KDE's built-in profile switching would write platform_profile
-# directly and race z13-power. Let z13-power own the profile entirely.
-#
-# KDE GUI equivalent: System Settings -> Power Management -> Profiles
-#   AC profile     -> Run Script -> %BIN%/z13-power performance
-#   Battery        -> Run Script -> %BIN%/z13-power balanced
-#   Low Battery    -> Run Script -> %BIN%/z13-power silent
+# KDE Plasma 6 PowerDevil — display/DPMS settings only.
+# Power profile switching is owned by the z13-power service (system tray);
+# KDE Run Script hooks are intentionally not used.
 
 [AC][Display]
 TurnOffDisplayIdleTimeoutSec=900
 TurnOffDisplayIdleTimeoutWhenLockedSec=-2
 
-[AC][RunScript]
-ProfileLoadCommand=%BIN%/z13-power performance
-
 [Battery][Display]
 DimDisplayIdleTimeoutSec=300
 TurnOffDisplayIdleTimeoutSec=1800
 TurnOffDisplayIdleTimeoutWhenLockedSec=-2
-
-[Battery][RunScript]
-ProfileLoadCommand=%BIN%/z13-power balanced
-
-[LowBattery][RunScript]
-ProfileLoadCommand=%BIN%/z13-power silent

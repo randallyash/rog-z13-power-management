@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+#
+# z13-power-service — system tray profile switcher + power profile watcher
+# for the ASUS ROG Flow Z13 (GZ302).
+#
+# Owns all power profile switching:
+#   - tray icon + menu to switch profiles manually (current one marked)
+#   - on power-source change:  AC -> performance, battery -> balanced
+#   - on low battery:          force silent (threshold, default 15%)
+#   - at startup:              apply the profile for the current power state
+#   - notifies (notify-send) on every switch and on external profile changes
+#
+# Runs as a user service (graphical-session.target). KDE PowerDevil Run Script
+# hooks are intentionally not used — this service replaces them.
+#
+# Config: ~/.config/z13-power/service.conf   [service] low_battery=15
+#
+# Usage:  z13-power-service
+#
+# Requires: z13ctl, z13-power, notify-send, python-pyqt6, pyudev.
+
+import configparser
+import os
+import subprocess
+import sys
+
+from PyQt6.QtCore import QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QCursor, QAction, QIcon
+from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+
+import pyudev
+
+CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
+
+MODES = {
+    "performance": "Performance",
+    "balanced": "Balanced",
+    "silent": "Silent",
+    "max": "Max",
+    "lowpower": "Low power",
+}
+MODE_ORDER = ["performance", "balanced", "silent", "max", "lowpower"]
+
+
+def read_power():
+    """Return (ac_online: bool, capacity: int|None)."""
+    ac = False
+    capacity = None
+    for d in os.listdir("/sys/class/power_supply"):
+        base = os.path.join("/sys/class/power_supply", d)
+        if not os.path.isdir(base):
+            continue
+        if d in ("AC", "ACAD", "AC0") or d.startswith("ADP"):
+            try:
+                with open(os.path.join(base, "online")) as f:
+                    ac = f.read().strip() == "1"
+            except OSError:
+                pass
+        elif d.startswith("BAT") and capacity is None:
+            try:
+                with open(os.path.join(base, "capacity")) as f:
+                    capacity = int(f.read().strip())
+            except OSError:
+                pass
+    return ac, capacity
+
+
+
+def z13_power(mode):
+    """Apply a z13-power mode; return True on success."""
+    try:
+        r = subprocess.run(
+            ["z13-power", mode], capture_output=True, text=True, timeout=30,
+        )
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def z13_sig():
+    """Fingerprint of the applied state: profile label + TDP PL1.
+
+    z13ctl's `profile --get` reports the active (possibly custom) profile
+    label, which alone is not enough — combine it with the PL1 power limit so
+    real changes (overlay, terminal, button) are detectable.
+    """
+    profile = ""
+    pl1 = ""
+    try:
+        profile = subprocess.run(
+            ["z13ctl", "profile", "--get"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        out = subprocess.run(
+            ["z13ctl", "tdp", "--get"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        for line in out.splitlines():
+            if "PL1" in line:
+                pl1 = line.split(":")[-1].strip()
+                break
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return f"{profile}|{pl1}"
+
+
+def notify(summary, body):
+    try:
+        subprocess.run(
+            ["notify-send", "-a", "z13-power", "-i", "preferences-system-power",
+             "-u", "normal", "-t", "3000", summary, body],
+            capture_output=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def load_config():
+    cfg = configparser.ConfigParser()
+    cfg["service"] = {"low_battery": "15"}
+    try:
+        cfg.read(CONFIG_PATH)
+        return int(cfg.get("service", "low_battery"))
+    except (configparser.Error, ValueError):
+        return 15
+
+
+class PowerMonitor(QThread):
+    """Watches udev power_supply events and re-emits them on the Qt thread."""
+
+    event = pyqtSignal()
+
+    def run(self):
+        try:
+            ctx = pyudev.Context()
+            monitor = pyudev.Monitor.from_netlink(ctx)
+            monitor.filter_by(subsystem="power_supply")
+        except Exception:
+            return  # no udev access — the safety poll timer covers us
+        for _ in monitor:
+            self.event.emit()
+
+
+class Service:
+    def __init__(self, app):
+        self.app = app
+        self.threshold = load_config()
+        self.override = False
+        self.low_latched = False
+        ac, _ = read_power()
+        self.last_ac = ac
+        self.last_sig = z13_sig()
+        self._last_applied = None
+
+        self.tray = QSystemTrayIcon(QIcon.fromTheme("preferences-system-power"))
+        self.menu = QMenu()
+        self.actions = {}
+        for mode in MODE_ORDER:
+            a = QAction(MODES[mode], self.menu, checkable=True)
+            a.triggered.connect(lambda _c, m=mode: self.manual(m))
+            self.actions[mode] = a
+            self.menu.addAction(a)
+        self.menu.addSeparator()
+        quit_a = QAction("Quit", self.menu)
+        quit_a.triggered.connect(self.app.quit)
+        self.menu.addAction(quit_a)
+        self.tray.setContextMenu(self.menu)
+        self.tray.activated.connect(lambda _r: self.menu.popup(QCursor.pos()))
+
+        self.monitor = PowerMonitor()
+        self.monitor.event.connect(self.on_power_event)
+        self.monitor.start()
+
+        # 3s: notify on externally-changed profile
+        self.poll_timer = QTimer()
+        self.poll_timer.timeout.connect(self.on_poll)
+        self.poll_timer.start(3000)
+
+        # 30s: safety re-evaluation in case udev missed an event
+        self.power_timer = QTimer()
+        self.power_timer.timeout.connect(self.evaluate_power)
+        self.power_timer.start(30000)
+
+    def start(self):
+        self.evaluate_power()
+        self.tray.show()
+
+    def manual(self, mode):
+        """User picked a mode from the tray menu."""
+        if self.apply(mode, force=True):
+            self.override = True
+            self.low_latched = False
+
+    def on_power_event(self):
+        self.evaluate_power()
+
+    def evaluate_power(self):
+        ac, capacity = read_power()
+        if ac != self.last_ac:
+            # Power source changed — a manual pick no longer stands.
+            self.override = False
+            self.last_ac = ac
+        # Hard safety rule: low battery forces silent, even over a manual pick.
+        if not ac and capacity is not None and capacity <= self.threshold:
+            self.low_latched = True
+            self.apply("silent")
+            return
+        if self.low_latched:
+            # Charged back above the threshold (or on AC) — release the latch.
+            self.low_latched = False
+            self.override = False
+        if self.override:
+            return  # user's manual choice stands until the power source changes
+        self.apply("performance" if ac else "balanced")
+
+    def apply(self, mode, force=False):
+        """Apply a mode; notify only when it actually changed (or force)."""
+        if not z13_power(mode):
+            notify("Power profile error", f"Failed to apply '{mode}'")
+            return False
+        self.last_sig = z13_sig()
+        self.update_tray(mode)
+        if force or mode != self._last_applied:
+            notify(f"Power profile: {MODES[mode]}", self._body(mode))
+        self._last_applied = mode
+        return True
+
+    def _body(self, mode):
+        ac, capacity = read_power()
+        src = "AC" if ac else ("battery %d%%" % capacity if capacity is not None else "battery")
+        return f"{src} · {MODES[mode]}"
+
+    def update_tray(self, mode):
+        for m, a in self.actions.items():
+            a.setChecked(m == mode)
+        self.tray.setToolTip(f"z13-power: {MODES[mode]}")
+        if not self.tray.isVisible():
+            self.tray.show()
+
+    def on_poll(self):
+        sig = z13_sig()
+        if not sig:
+            return
+        if sig != self.last_sig:
+            # Changed by something outside the service (overlay, terminal, button).
+            self.last_sig = sig
+            self.override = True
+            self.low_latched = False
+            notify("Power profile changed", f"Now: {sig.split('|')[0]} (set externally)")
+            self.update_tray(sig.split("|")[0])
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+    service = Service(app)
+    service.start()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
