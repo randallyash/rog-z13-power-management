@@ -3,27 +3,24 @@
 # z13-power-service — system tray profile switcher + power profile watcher
 # for the ASUS ROG Flow Z13 (GZ302).
 #
-# Owns all power profile switching:
-#   - tray icon + menu (left- or right-click) to switch profiles manually
+# Owns all power profile switching and runs the z13ctl commands directly from
+# configuration:
+#   - tray icon + menu: left-click cycles profiles, right-click opens the menu
 #   - "Automatic" mode (default): AC -> on_ac, battery -> on_battery,
-#     low battery -> on_low_battery (all configurable)
+#     low battery -> on_low_battery
 #   - manual picks apply immediately; unless locked, they clear on the next
 #     power-source change and return to Automatic
 #   - "Lock profile": a manual pick survives power changes (low battery still
 #     forces the safety profile, then restores your locked pick)
-#   - "Configure…": opens ~/.config/z13-power/service.conf
+#   - "Configure…": opens ~/.config/z13-power/service.conf (fully commented)
 #   - notifies (notify-send) on every switch and on external profile changes
 #
-# Config: ~/.config/z13-power/service.conf
-#   [service]
-#   low_battery    = 15          # percent; below this on battery -> on_low_battery
-#   on_ac          = performance # mode applied when plugged in
-#   on_battery     = balanced    # mode applied on battery
-#   on_low_battery = silent      # mode applied below the threshold
+# Config: ~/.config/z13-power/service.conf — every z13ctl call the service makes
+# (profile, TDP limits, fan curve, undervolt) is defined there, per mode.
 #
 # Usage:  z13-power-service
 #
-# Requires: z13ctl, z13-power, notify-send, python-pyqt6, pyudev.
+# Requires: z13ctl, notify-send, python-pyqt6, pyudev.
 
 import configparser
 import os
@@ -54,8 +51,114 @@ MODE_COLORS = {
     "max": "#ff8c00",
     "lowpower": "#ffd23f",
 }
-DEFAULT_CFG = {"low_battery": "15", "on_ac": "performance",
-               "on_battery": "balanced", "on_low_battery": "silent"}
+
+DEFAULT_MODES = {
+    "performance": {"profile": "performance", "tdp": "75 93 93",
+                    "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
+    "balanced": {"profile": "balanced", "tdp": "52 71 70",
+                 "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
+    "silent": {"profile": "quiet", "tdp": "20 40 40",
+               "tdp_force": "false", "fancurve": "reset", "undervolt": "-20"},
+    "max": {"profile": "performance", "tdp": "93",
+            "tdp_force": "true", "fancurve": "reset", "undervolt": "reset"},
+    "lowpower": {"profile": "quiet", "tdp": "5",
+                 "tdp_force": "false", "fancurve": "reset", "undervolt": "-25"},
+}
+
+CONFIG_TEMPLATE = """\
+# =============================================================================
+#  z13-power — ROG Flow Z13 power profile configuration
+#  Read by the z13-power-service tray app. Editing takes effect within ~30s
+#  (no restart needed). Opens with the tray menu -> Configure….
+#
+#  Modes: performance | balanced | silent | max | lowpower
+#  Firmware profiles: quiet | balanced | performance
+# =============================================================================
+
+[service]
+# Battery percent at or below which `on_low_battery` applies (on battery only).
+low_battery = 15
+
+# Which mode to apply in each power state (used while the tray is on "Automatic").
+on_ac = performance
+on_battery = balanced
+on_low_battery = silent
+
+# -----------------------------------------------------------------------------
+#  [modes.<name>] — what the service runs for each profile mode.
+#
+#  profile     Firmware profile written to platform_profile (asus-wmi):
+#                quiet        — Silent/Eco mode (low power, low noise)
+#                balanced     — Balanced mode (default)
+#                performance  — Turbo mode (maximum performance)
+#
+#  tdp         TDP (Package Power Tracking) power limits, in watts.
+#                One number  -> all limits set to it,      e.g.  tdp = 93
+#                Three       -> PL1 PL2 PL3,               e.g.  tdp = 75 93 93
+#              PL1 = sustained (long-term) power cap.
+#              PL2 = boost / short-burst power cap.
+#              PL3 = peak / emergency burst cap.
+#              PL1 is capped at 75 W unless tdp_force = true (hardware max
+#              93 W on the GZ302E). PL2/PL3 may go to 93 W without --force.
+#
+#  tdp_force   true  -> allow PL1 above 75 W (also writes a 50% PWM fan floor
+#                       that reaches 100% at 80 C as a safety net).
+#              false -> PL1 stays <= 75 W.
+#
+#  fancurve    reset                     -> firmware auto mode (both fans).
+#              auto                      -> same as reset.
+#              'T1:S1,T2:S2,...' (8 pts) -> custom curve on both fans. T = temp
+#                in C (monotonically increasing); S = speed as PWM 0-255 or a
+#                percentage with % (non-decreasing). Formats may be mixed.
+#                e.g. 40:30%,50:40%,60:60%,70:75%,80:90%,85:95%,90:98%,95:100%
+#              NOTE: the kernel drops custom curves on every power profile
+#              change; the z13ctl daemon re-applies within a couple of seconds.
+#
+#  undervolt   reset   -> CPU stock voltage (0).
+#              -1..-40 -> negative Curve Optimizer offset in mV, applied to all
+#                cores. Undervolting lowers voltage (less heat, same clocks).
+#                Requires the ryzen_smu kernel module (ryzen_smu-dkms-git AUR,
+#                amkillam fork for Strix Halo). Without it the undervolt step
+#                is skipped while profile/TDP/fancurve still apply. CO values
+#                are volatile across reboot/sleep; the z13ctl daemon re-applies
+#                them on startup/resume.
+# -----------------------------------------------------------------------------
+
+[modes.performance]
+profile = performance
+tdp = 75 93 93
+tdp_force = false
+fancurve = reset
+undervolt = reset
+
+[modes.balanced]
+profile = balanced
+tdp = 52 71 70
+tdp_force = false
+fancurve = reset
+undervolt = reset
+
+[modes.silent]
+profile = quiet
+tdp = 20 40 40
+tdp_force = false
+fancurve = reset
+undervolt = -20
+
+[modes.max]
+profile = performance
+tdp = 93
+tdp_force = true
+fancurve = reset
+undervolt = reset
+
+[modes.lowpower]
+profile = quiet
+tdp = 5
+tdp_force = false
+fancurve = reset
+undervolt = -25
+"""
 
 
 def read_power():
@@ -111,15 +214,50 @@ def z13_sig():
     return f"{profile}|{pl1}"
 
 
-def z13_power(mode):
-    """Apply a z13-power mode; return True on success."""
+def z13ctl(args):
+    """Run a z13ctl command; return the CompletedProcess or None."""
     try:
-        r = subprocess.run(
-            ["z13-power", mode], capture_output=True, text=True, timeout=30,
-        )
-        return r.returncode == 0
+        return subprocess.run(["z13ctl", *args], capture_output=True,
+                              text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def ryzen_smu_loaded():
+    try:
+        with open("/proc/modules") as f:
+            return "ryzen_smu_drv" in f.read()
+    except OSError:
         return False
+
+
+def apply_mode(mode_def):
+    """Run the z13ctl commands described by a mode config dict. Returns True."""
+    profile = mode_def.get("profile", "balanced")
+    if profile in ("quiet", "balanced", "performance"):
+        z13ctl(["profile", "--set", profile])
+    tdp = mode_def.get("tdp", "52 71 70").split()
+    args = ["tdp", "--set"]
+    if len(tdp) == 1:
+        args.append(tdp[0])
+    elif len(tdp) >= 3:
+        args += [tdp[0], "--pl2", tdp[1], "--pl3", tdp[2]]
+    if str(mode_def.get("tdp_force", "false")).strip().lower() in ("true", "yes", "1"):
+        args.append("--force")
+    z13ctl(args)
+    fancurve = str(mode_def.get("fancurve", "reset")).strip()
+    if fancurve in ("reset", "auto"):
+        z13ctl(["fancurve", "--reset"])
+    else:
+        z13ctl(["fancurve", "--set", fancurve])
+    undervolt = str(mode_def.get("undervolt", "reset")).strip()
+    if undervolt != "reset" and not ryzen_smu_loaded():
+        return True  # no ryzen_smu — profile/TDP/fancurve still applied
+    if undervolt == "reset":
+        z13ctl(["undervolt", "--reset"])
+    else:
+        z13ctl(["undervolt", "--set", undervolt])
+    return True
 
 
 def notify(summary, body):
@@ -135,40 +273,45 @@ def notify(summary, body):
 
 def load_config():
     cfg = configparser.ConfigParser()
-    cfg["service"] = dict(DEFAULT_CFG)
+    cfg.read(CONFIG_PATH)
+    out = {"low_battery": 15, "on_ac": "performance",
+           "on_battery": "balanced", "on_low_battery": "silent", "modes": {}}
     try:
-        cfg.read(CONFIG_PATH)
-    except configparser.Error:
+        out["low_battery"] = int(cfg.get("service", "low_battery"))
+    except (configparser.Error, ValueError):
         pass
-    out = {}
-    for key, default in DEFAULT_CFG.items():
+    for key in ("on_ac", "on_battery", "on_low_battery"):
         try:
             value = cfg.get("service", key).strip()
-        except (configparser.Error, ValueError):
-            value = default
-        if key == "low_battery":
+            if value in MODES:
+                out[key] = value
+        except configparser.Error:
+            pass
+    for section in cfg.sections():
+        if not section.startswith("modes."):
+            continue
+        name = section[len("modes."):]
+        if name not in MODES:
+            continue
+        mode_def = dict(DEFAULT_MODES[name])
+        for key in mode_def:
             try:
-                out[key] = int(value)
-            except ValueError:
-                out[key] = 15
-        else:
-            out[key] = value if value in MODES else default
+                mode_def[key] = cfg.get(section, key).strip()
+            except configparser.Error:
+                pass
+        if mode_def["profile"] not in ("quiet", "balanced", "performance"):
+            mode_def["profile"] = DEFAULT_MODES[name]["profile"]
+        out["modes"][name] = mode_def
     return out
 
 
 def ensure_config():
-    """Write a commented default config if none exists yet."""
+    """Write the fully-commented default config if none exists yet."""
     if os.path.exists(CONFIG_PATH):
         return
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     with open(CONFIG_PATH, "w") as f:
-        f.write("# z13-power service configuration\n"
-                "# Modes: performance, balanced, silent, max, lowpower\n"
-                "[service]\n"
-                "low_battery = 15\n"
-                "on_ac = performance\n"
-                "on_battery = balanced\n"
-                "on_low_battery = silent\n")
+        f.write(CONFIG_TEMPLATE)
 
 
 def make_icon(color):
@@ -275,11 +418,18 @@ class Service:
         self.tray.show()
 
     def on_activated(self, reason):
-        # Plasma shows the context menu itself on right-click; open it
-        # explicitly for left-click and double-click.
+        # Right-click: Plasma renders the context menu natively. Left/middle
+        # click: cycle to the next profile (menu popups on Wayland are
+        # position-unreliable, so cycling gives visible feedback instead).
         if reason in (QSystemTrayIcon.ActivationReason.Trigger,
-                      QSystemTrayIcon.ActivationReason.DoubleClick):
-            self.menu.popup(QCursor.pos())
+                      QSystemTrayIcon.ActivationReason.MiddleClick):
+            self.cycle()
+
+    def cycle(self):
+        cur = self.manual_mode if not self.automatic else self._last_applied
+        idx = MODE_ORDER.index(cur) if cur in MODE_ORDER else -1
+        nxt = MODE_ORDER[(idx + 1) % len(MODE_ORDER)]
+        self.manual(nxt)
 
     def manual(self, mode):
         """User picked a mode from the tray menu."""
@@ -339,7 +489,8 @@ class Service:
 
     def apply(self, mode, force=False):
         """Apply a mode; notify only when it actually changed (or force)."""
-        if not z13_power(mode):
+        mode_def = self.cfg["modes"].get(mode) or DEFAULT_MODES[mode]
+        if not apply_mode(mode_def):
             notify("Power profile error", f"Failed to apply '{mode}'")
             return False
         self._last_applied = mode

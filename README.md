@@ -26,15 +26,18 @@ One command, seven modes (`z13-power <mode>`), plus a tray app:
 | `toggle` | — | toggles z13gui overlay drawer | — | manual |
 
 `z13-power-service` (system tray):
-- **Tray icon + menu** — left- or right-click opens it; five modes + Automatic,
-  current one marked. ROG-style icon tinted by the active profile.
+- **Tray icon + menu** — left-click cycles profiles, right-click opens the
+  menu; five modes + Automatic, current one marked. ROG-style icon tinted by
+  the active profile.
 - **Automatic** (default) — applies `on_ac` / `on_battery` / `on_low_battery`
   from config on login and power changes
 - **Manual picks** apply immediately; unless **Lock profile** is checked, they
   clear on the next plug/unplug and return to Automatic
 - **Lock profile** — a manual pick survives power changes (low battery still
   forces the safety profile, then restores your locked pick)
-- **Configure…** — opens `~/.config/z13-power/service.conf` in your editor
+- **Configure…** — opens `~/.config/z13-power/service.conf`: every z13ctl call
+  it makes (profile, TDP limits, fan curve, undervolt) is defined there,
+  per mode, fully commented
 - **Notifications** — KDE popup on every switch, and when a profile is changed
   from outside the service (overlay, terminal, Armoury Crate button)
 
@@ -106,8 +109,10 @@ A tray icon should appear — click it to switch profiles manually.
 
 ## Configuration
 
-`~/.config/z13-power/service.conf` (created on first run; `Configure…` in the
-tray menu opens it):
+`~/.config/z13-power/service.conf` (created on first run with full inline
+documentation; `Configure…` in the tray menu opens it). The `[service]` section
+maps power states to modes; each `[modes.<name>]` section defines exactly what
+`z13ctl` commands run for that profile:
 
 ```ini
 [service]
@@ -115,6 +120,13 @@ low_battery = 15
 on_ac = performance
 on_battery = balanced
 on_low_battery = silent
+
+[modes.performance]
+profile = performance
+tdp = 75 93 93        # PL1 PL2 PL3 watts (one number = all equal)
+tdp_force = false     # allow PL1 > 75 (hardware max 93)
+fancurve = reset      # reset | "40:30%,50:40%,..." (8-point curve)
+undervolt = reset     # reset | -1..-40 (Curve Optimizer mV)
 ```
 
 Values are validated (bad ones fall back to defaults) and reloaded

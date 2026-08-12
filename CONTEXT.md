@@ -43,27 +43,37 @@ TDP arg order: `--pl1 PL1 --pl2 PL2 --pl3 PL3`. UV steps skip gracefully when
 ## Service behavior
 
 Menu = 5 modes + **Automatic** (exclusive QActionGroup) + **Lock profile**
-(checkbox, enabled only on a manual pick) + **Configure…** + Quit. Left- or
-right-click opens the menu (Plasma renders the context menu for right-click;
-left/double-click pops it at the cursor).
+(checkbox, enabled only on a manual pick) + **Configure…** + Quit. Left/middle
+click CYCLES to the next profile (Trigger); right-click = Plasma-native menu.
+(Menu popups on Plasma Wayland are position-unreliable — that's why left-click
+cycles instead of opening the menu; PyQt6 6.x also lacks QSystemTrayIcon.setMenu.)
 
 State: `automatic` (default), `manual_mode`, `locked`.
+- **Executor**: the service runs `z13ctl` DIRECTLY per mode — it no longer
+  shells out to `z13-power` (removes both the config gap and double
+  notifications from a stale z13-power). `z13-power` remains only as the
+  manual CLI (its hardcoded presets match DEFAULT_MODES).
 - **Automatic**: applies `on_ac` / `on_battery` / `on_low_battery` from config
   on login, on udev power_supply events (30s safety poll fallback), and after
   an unlocked manual pick is cleared.
 - **Manual pick**: applies immediately; unless **locked**, it clears on the
   next power-source change → back to Automatic. Locked picks survive changes.
-- **Low battery** (capacity <= `low_battery`, configurable): latches the
-  configured `on_low_battery` profile EVEN over a locked/manual pick; restores
-  the locked pick when back above the threshold.
+- **Low battery** (capacity <= `low_battery`): latches the configured
+  `on_low_battery` profile EVEN over a locked/manual pick; restores the locked
+  pick when back above the threshold.
+- **Mode definitions**: `~/.config/z13-power/service.conf` `[modes.<name>]`
+  sections — `profile`, `tdp` ("A" or "A B C" → `--set A [--pl2 B --pl3 C]`),
+  `tdp_force` (adds `--force`), `fancurve` (`reset`/`auto` → `--reset`,
+  else passed to `--set` as the 8-point string), `undervolt` (`reset` → `--reset`,
+  else `--set <v>`, skipped without ryzen_smu). DEFAULT_MODES are the fallback.
 - **3s profile poll**: `z13_sig()` = `z13ctl profile --get` label + TDP PL1.
   External changes (overlay/terminal/button) → notify + treated as an unlocked
   manual pick. Signature needed because `profile --get` returns the active
   custom-profile label (e.g. "custom") even when the platform profile changed.
-- **Config** `~/.config/z13-power/service.conf` (created on first run;
-  `Configure…` opens it via $VISUAL/$EDITOR or xdg-open): keys `low_battery`,
-  `on_ac`, `on_battery`, `on_low_battery`; values validated against MODES,
-  reloaded every 30s (no restart needed).
+- **Config** reloaded every 30s; `Configure…` opens it ($VISUAL/$EDITOR or
+  xdg-open). Template written on first run with extensive comments (PL1/PL2/PL3
+  semantics + 75W/force rule, fan-curve point format + profile-change gotcha,
+  CO safety range, ryzen_smu requirement).
 - **Tray icon**: QPainter-drawn ROG-style dark tile + lightning bolt, color
   per mode (performance red, balanced cyan, silent green, max orange, lowpower
   amber); tooltip shows mode + automatic/manual/locked.
