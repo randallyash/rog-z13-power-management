@@ -3,11 +3,10 @@
 # z13-power — consolidated power profile manager for the ASUS ROG Flow Z13 (GZ302)
 #
 # Thin wrapper over z13ctl (github.com/dahui/z13ctl) that applies a tuned preset
-# in one command. Designed to be invoked by KDE PowerDevil "Run Script" hooks
-# (AC / Battery / Low Battery) or manually from a terminal / shortcut.
+# in one command, or opens the settings window (z13-power-settings).
 #
 # Usage:  z13-power <mode>
-# Modes:  balanced | performance | max | silent | lowpower | status | toggle
+# Modes:  balanced | performance | max | silent | lowpower | status | settings | diagnose | help
 
 set -euo pipefail
 
@@ -55,7 +54,7 @@ modes:
   silent       quiet profile, TDP 20/40/40, undervolt -20 mV
   lowpower     quiet profile, TDP 5 W, undervolt -25 mV
   status       show current profile / TDP / fan curve / undervolt
-  toggle       toggle the z13gui overlay drawer service (requires z13gui-bin)
+  settings     open the settings window (lighting, fan curve, battery, power)
   diagnose     check z13 setup (hardware, perms, daemon, modules) and show fixes
   help         show this message
 EOF
@@ -184,23 +183,13 @@ case "${1:-}" in
     echo "## CPU Undervolt:"
     z13ctl undervolt --get 2>/dev/null || echo "  (unavailable)"
     ;;
-  toggle)
-    SERVICE="z13gui.service"
-    if ! systemctl --user list-unit-files 2>/dev/null | grep -qw "$SERVICE"; then
-      die "z13gui not installed — install z13gui-bin (AUR) to use the overlay toggle"
-    fi
-    if systemctl --user is-active --quiet "$SERVICE"; then
-      echo "Stopping $SERVICE..."
-      systemctl --user stop "$SERVICE"
-      systemctl --user is-active --quiet "$SERVICE" \
-        && die "failed to stop $SERVICE"
-      echo "$SERVICE stopped."
+  settings)
+    if command -v z13-power-settings >/dev/null 2>&1; then
+      exec z13-power-settings
+    elif [[ -x "$HOME/.local/bin/z13-power-settings" ]]; then
+      exec "$HOME/.local/bin/z13-power-settings"
     else
-      echo "Starting $SERVICE..."
-      systemctl --user start "$SERVICE"
-      systemctl --user is-active --quiet "$SERVICE" \
-        || die "failed to start $SERVICE"
-      echo "$SERVICE started."
+      die "z13-power-settings not found — reinstall z13-power (or run: ./install.sh)"
     fi
     ;;
   diagnose)

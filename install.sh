@@ -2,14 +2,15 @@
 #
 # install.sh — ROG Flow Z13 power management setup
 #
-# Installs the z13-power profile manager + the z13-power-service tray/watcher
-# (which owns all power profile switching), enables the z13ctl daemon stack,
-# and deploys the KDE PowerDevil display settings.
+# Installs the z13-power profile manager, the z13-power-service tray/watcher
+# (which owns all power profile switching) and the z13-power-settings window
+# (lighting, fan curve, battery, power), enables the z13ctl daemon stack, and
+# deploys the KDE PowerDevil display settings.
 #
 # Requirements:
 #   - 2025 ASUS ROG Flow Z13 (GZ302)
 #   - Arch Linux / CachyOS with KDE Plasma 6
-#   - AUR packages: z13ctl-bin (required), z13gui-bin (optional)
+#   - AUR packages: z13ctl-bin (required)
 #   - ryzen_smu kernel module for undervolt support (optional)
 #   - The rog-z13-trackpad-fix project for the touchpad DWT fix (optional)
 #
@@ -33,14 +34,6 @@ if ! command -v z13ctl >/dev/null 2>&1; then
 fi
 OK "z13ctl found: $(z13ctl --version | head -1)"
 
-# Optional: z13gui (overlay drawer). Needed only for the Meta+B toggle button.
-GUI_INSTALLED=false
-if systemctl --user list-unit-files z13gui.service >/dev/null 2>&1 && systemctl --user list-unit-files z13gui.service | grep -q z13gui; then
-  GUI_INSTALLED=true
-  OK "z13gui service unit present (optional overlay drawer)"
-else
-  WARN "z13gui not found. Optional: paru -S z13gui-bin  (needed only for the Meta+B overlay toggle)"
-fi
 
 # Optional: ryzen_smu (needed for undervolt; z13-power skips it gracefully).
 if ! grep -qw ryzen_smu_drv /proc/modules 2>/dev/null; then
@@ -62,7 +55,9 @@ cp "$SCRIPT_DIR/scripts/z13-power" "$BIN_DIR/z13-power"
 chmod +x "$BIN_DIR/z13-power"
 cp "$SCRIPT_DIR/service/z13-power-service" "$BIN_DIR/z13-power-service"
 chmod +x "$BIN_DIR/z13-power-service"
-OK "Installed z13-power + z13-power-service to $BIN_DIR"
+cp "$SCRIPT_DIR/service/z13-power-settings" "$BIN_DIR/z13-power-settings"
+chmod +x "$BIN_DIR/z13-power-settings"
+OK "Installed z13-power + z13-power-service + z13-power-settings to $BIN_DIR"
 
 if ! python3 -c "import PyQt6, pyudev" >/dev/null 2>&1; then
   WARN "z13-power-service needs python-pyqt6 + pyudev — install: paru -S python-pyqt6 python-pyudev"
@@ -91,9 +86,6 @@ fi
 # ── 3. Enable the daemon stack ────────────────────────────────────────────────
 systemctl --user enable --now z13ctl.socket z13ctl.service 2>/dev/null || \
   WARN "Could not enable z13ctl user units — are they installed (z13ctl setup)?"
-if [[ "$GUI_INSTALLED" == true ]]; then
-  systemctl --user enable --now z13gui.service 2>/dev/null || WARN "Could not enable z13gui.service"
-fi
 
 # ── 4. Touchpad DWT fix (optional, from rog-z13-trackpad-fix) ────────────────
 if [[ ! -f /etc/udev/rules.d/99-rog-z13-touchpad.rules ]]; then
@@ -127,8 +119,8 @@ Remaining manual steps:
   2. The tray icon should be in the system tray — click it to switch profiles.
      Profile switching (AC -> performance, battery -> balanced, low -> silent)
      is handled automatically by z13-power-service.
-  3. (Optional) For a quick toggle without the tray: ~/.local/bin/z13-power toggle
-     toggles the z13gui overlay drawer (requires z13gui).
+  3. (Optional) The Meta+B panel button runs: ~/.local/bin/z13-power settings
+     to open the settings window (lighting, fan curve, battery, power).
 
 To verify: run  ~/.local/bin/z13-power status
 EOF

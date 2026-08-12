@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 import pyudev
 
 CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
+LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
 
 MODES = {
     "performance": "Performance",
@@ -280,6 +281,32 @@ def notify(summary, body):
         pass
 
 
+def apply_saved_lighting():
+    """Re-apply the lighting settings saved by z13-power-settings (if any)."""
+    cfg = configparser.ConfigParser()
+    cfg.read(LIGHTING_PATH)
+    if not cfg.has_section("lighting"):
+        return
+    lighting = {key: cfg.get("lighting", key, fallback=default).strip()
+                for key, default in (("device", "all"), ("mode", "static"),
+                                     ("color1", "FF0000"), ("color2", "000000"),
+                                     ("speed", "normal"),
+                                     ("brightness", "high"))}
+    device_args = [] if lighting["device"] == "all" \
+        else ["--device", lighting["device"]]
+    if lighting["mode"] == "off":
+        z13ctl(["off", *device_args])
+        return
+    args = ["apply", "--mode", lighting["mode"],
+            "--color", lighting["color1"].lstrip("#"),
+            "--brightness", lighting["brightness"], *device_args]
+    if lighting["mode"] == "breathe":
+        args += ["--color2", lighting["color2"].lstrip("#")]
+    if lighting["mode"] not in ("static",):
+        args += ["--speed", lighting["speed"]]
+    z13ctl(args)
+
+
 def load_config():
     cfg = configparser.ConfigParser()
     cfg.read(CONFIG_PATH)
@@ -355,8 +382,13 @@ class PowerMonitor(QThread):
             monitor.filter_by(subsystem="power_supply")
         except Exception:
             return  # no udev access — the safety poll timer covers us
-        for _ in monitor:
-            self.event.emit()
+        for device in monitor:
+            name = getattr(device, "sys_name", "")
+            # Only the AC adapter matters for power-source changes. USB-C PD
+            # ports (ucsi-source-psy-*) and the battery emit power_supply
+            # events that must not re-evaluate the power state.
+            if name in ("AC", "ACAD", "AC0") or name.startswith("ADP"):
+                self.event.emit()
 
 
 class Service:
@@ -369,6 +401,8 @@ class Service:
         self.low_latched = False
         ac, _ = read_power()
         self.last_ac = ac
+        self.ac_probe = ac
+        self.ac_probe_count = 0
         self.last_profile = z13_profile()
         self._last_applied = None
         self._last_notified = None
@@ -404,6 +438,9 @@ class Service:
         configure_a = QAction("Configure\u2026", self.menu)
         configure_a.triggered.connect(self.open_config)
         self.menu.addAction(configure_a)
+        settings_a = QAction("Settings\u2026", self.menu)
+        settings_a.triggered.connect(self.open_settings)
+        self.menu.addAction(settings_a)
         quit_a = QAction("Quit", self.menu)
         quit_a.triggered.connect(self.app.quit)
         self.menu.addAction(quit_a)
@@ -427,6 +464,7 @@ class Service:
 
     def start(self):
         self.evaluate_power()
+        apply_saved_lighting()
         self.tray.show()
         self.startup_diagnose()
 
@@ -489,10 +527,23 @@ class Service:
         self.cfg = load_config()
         ac, capacity = read_power()
         if ac != self.last_ac:
-            self.last_ac = ac
-            if not self.automatic and not self.locked:
-                # An unlocked manual pick clears on power-source change.
-                self.set_automatic()
+            # Hysteresis: require two consistent reads before treating this
+            # as a real power-source change. USB-C PD renegotiation can glitch
+            # AC0 for a single read; that must not clear an unlocked manual pick.
+            if ac == self.ac_probe:
+                self.ac_probe_count += 1
+            else:
+                self.ac_probe = ac
+                self.ac_probe_count = 1
+            if self.ac_probe_count >= 2:
+                self.last_ac = ac
+                self.ac_probe_count = 0
+                if not self.automatic and not self.locked:
+                    # An unlocked manual pick clears on power-source change.
+                    self.set_automatic()
+        else:
+            self.ac_probe = ac
+            self.ac_probe_count = 0
         low = not ac and capacity is not None and capacity <= self.cfg["low_battery"]
         if low:
             # Safety rule: low battery forces the configured profile.
@@ -505,7 +556,9 @@ class Service:
                 self.apply(self.manual_mode)  # restore locked/manual pick
                 return
         if self.automatic:
-            self.apply(self.cfg["on_ac"] if ac else self.cfg["on_battery"])
+            mode = self.cfg["on_ac"] if ac else self.cfg["on_battery"]
+            if mode != self._last_applied:
+                self.apply(mode)
 
     def apply(self, mode, force=False):
         """Apply a mode; notify only when it actually changed (or force)."""
@@ -560,6 +613,13 @@ class Service:
                 subprocess.Popen(["xdg-open", CONFIG_PATH])
         except OSError:
             notify("z13-power", f"Config: {CONFIG_PATH}")
+
+    def open_settings(self):
+        try:
+            subprocess.Popen(["z13-power-settings"])
+        except OSError:
+            notify("z13-power", "z13-power-settings not found in PATH")
+
     def show_diagnose(self):
         from PyQt6.QtWidgets import QMessageBox
         box = QMessageBox()

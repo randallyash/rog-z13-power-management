@@ -8,12 +8,15 @@ Built on [z13ctl](https://github.com/dahui/z13ctl). A single **system tray
 service** (`z13-power-service`) owns all profile switching: it applies the right
 profile at login, on power-source changes, and on low battery, gives you a tray
 menu to switch profiles manually, and pops a KDE notification on every switch.
+A **settings window** (`z13-power-settings`) covers the rest of what the z13gui
+overlay drawer used to do — RGB lighting, fan curves, battery charge limit,
+panel overdrive, boot sound, live telemetry.
 No KDE "Run Script" hooks, no PowerDevil configuration, no autoswitch config —
 works on any desktop.
 
 ## What it does
 
-One command, seven modes (`z13-power <mode>`), plus a tray app:
+One command, six modes (`z13-power <mode>`) plus a settings window, and a tray app:
 
 | Mode | Profile | TDP (W) | Undervolt | Used for |
 |------|---------|---------|-----------|----------|
@@ -23,7 +26,7 @@ One command, seven modes (`z13-power <mode>`), plus a tray app:
 | `silent` | quiet | 20 / 40 / 40 | -20 mV | **Low battery** |
 | `lowpower` | quiet | 5 | -25 mV | manual |
 | `status` | — | shows current state | — | manual |
-| `toggle` | — | toggles z13gui overlay drawer | — | manual |
+| `settings` | — | opens the settings window | — | manual |
 
 `z13-power-service` (system tray):
 - **Tray icon + menu** — left-click cycles profiles, right-click opens the
@@ -44,6 +47,17 @@ One command, seven modes (`z13-power <mode>`), plus a tray app:
   modules) and shows the report with fixes; also checked at service startup
   (only notifies if something is wrong)
 
+`z13-power-settings` (settings window, replaces the z13gui drawer):
+- **Lighting** — keyboard + lightbar zones, effect (static / breathe / cycle /
+  rainbow / strobe / off), two colors (presets or an HSL picker), speed,
+  brightness. Selections persist in `lighting.conf` and are re-applied at login.
+- **Fan curve** — fetch the live 8-point curve, edit temp/speed pairs, apply or
+  reset to firmware auto (75 W PL1 safety rules enforced).
+- **Battery** — charge limit slider (40–100%), shows the current limit.
+- **Power** — panel overdrive and boot sound toggles.
+- **Telemetry** — live APU temperature, fan RPM, profile, TDP, power source.
+Opened from the tray menu (**Settings…**) or with `z13-power settings` (the
+Meta+B panel button).
 The low-battery tier is the reason this project exists — z13ctl's own autoswitch
 only supports AC/battery.
 
@@ -53,12 +67,11 @@ only supports AC/battery.
 - Arch Linux / CachyOS with KDE Plasma 6
 - AUR: [`z13ctl-bin`](https://github.com/dahui/z13ctl) (required)
 - `python-pyqt6`, `python-pyudev`, `libnotify` (required — tray service + notifications)
-- AUR: [`z13gui-bin`](https://github.com/dahui/z13gui) (optional — for `toggle`)
 - `ryzen_smu` kernel module (optional — needed only for undervolt; without it
   `z13-power` warns and skips the undervolt step)
-- AUR conflicts: if you already run a `z13ctl`/`z13gui` variant (e.g.
-  `z13ctl-plus-bin`), pacman will offer to swap it for `z13ctl-bin`/`z13gui-bin`
-  — that's expected and safe (they can't coexist; see Install)
+- AUR conflicts: if you already run a `z13ctl` variant (e.g. `z13ctl-plus-bin`),
+  pacman will offer to swap it for `z13ctl-bin` — that's expected and safe.
+  `z13gui-bin` is no longer needed: remove it with `paru -Rns z13gui-bin`.
 
 ## Install
 
@@ -98,7 +111,7 @@ cd rog-z13-power-management
 ```
 
 Either path:
-1. Checks dependencies (`z13ctl`, `z13gui`, `ryzen_smu`, `users` group)
+1. Checks dependencies (`z13ctl`, `ryzen_smu`, `users` group)
 2. Installs `z13-power` + `z13-power-service` (to `/usr/bin` or `~/.local/bin`)
 3. Runs `sudo z13ctl setup` (udev rules + sysfs permission service) if needed
 4. Enables the `z13ctl` daemon + socket and the `z13-power-service` tray app
@@ -163,9 +176,10 @@ automatically every ~30s — no service restart needed.
 ```
 ├── install.sh              # from-source installer (deps, units, config deploy)
 ├── scripts/
-│   └── z13-power           # the mode CLI: 7 modes in one script
+│   └── z13-power           # the mode CLI: 6 modes + settings in one script
 ├── service/
 │   ├── z13-power-service   # tray icon + power profile watcher (PyQt6)
+│   ├── z13-power-settings  # settings window: RGB, fan curve, battery, power
 │   └── z13-power-service.service   # systemd user unit
 ├── contrib/
 │   └── z13-power-config    # packaged helper: deploys KDE display settings
@@ -178,4 +192,6 @@ automatically every ~30s — no service restart needed.
 ## Credits
 
 - [z13ctl](https://github.com/dahui/z13ctl) — system control for the Z13
-- [z13gui](https://github.com/dahui/z13gui) — GTK4 overlay drawer
+- This project replaces the [z13gui](https://github.com/dahui/z13gui) overlay
+  drawer: profiles, RGB lighting, fan curves, battery limit, panel overdrive,
+  boot sound, telemetry — all in the system tray + settings window.
