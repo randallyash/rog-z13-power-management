@@ -26,10 +26,15 @@ One command, seven modes (`z13-power <mode>`), plus a tray app:
 | `toggle` | — | toggles z13gui overlay drawer | — | manual |
 
 `z13-power-service` (system tray):
-- **Tray icon + menu** — switch profiles manually, current one marked
-- **Login** — applies the profile for the current power source immediately
-- **AC / battery** — switches `performance` ↔ `balanced` on plug/unplug
-- **Low battery** — forces `silent` below a threshold (default 15%, configurable)
+- **Tray icon + menu** — left- or right-click opens it; five modes + Automatic,
+  current one marked. ROG-style icon tinted by the active profile.
+- **Automatic** (default) — applies `on_ac` / `on_battery` / `on_low_battery`
+  from config on login and power changes
+- **Manual picks** apply immediately; unless **Lock profile** is checked, they
+  clear on the next plug/unplug and return to Automatic
+- **Lock profile** — a manual pick survives power changes (low battery still
+  forces the safety profile, then restores your locked pick)
+- **Configure…** — opens `~/.config/z13-power/service.conf` in your editor
 - **Notifications** — KDE popup on every switch, and when a profile is changed
   from outside the service (overlay, terminal, Armoury Crate button)
 
@@ -101,12 +106,19 @@ A tray icon should appear — click it to switch profiles manually.
 
 ## Configuration
 
-`~/.config/z13-power/service.conf`:
+`~/.config/z13-power/service.conf` (created on first run; `Configure…` in the
+tray menu opens it):
 
 ```ini
 [service]
 low_battery = 15
+on_ac = performance
+on_battery = balanced
+on_low_battery = silent
 ```
+
+Values are validated (bad ones fall back to defaults) and reloaded
+automatically every ~30s — no service restart needed.
 
 ## Caveats
 

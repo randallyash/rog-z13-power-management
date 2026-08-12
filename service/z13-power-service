@@ -4,16 +4,22 @@
 # for the ASUS ROG Flow Z13 (GZ302).
 #
 # Owns all power profile switching:
-#   - tray icon + menu to switch profiles manually (current one marked)
-#   - on power-source change:  AC -> performance, battery -> balanced
-#   - on low battery:          force silent (threshold, default 15%)
-#   - at startup:              apply the profile for the current power state
+#   - tray icon + menu (left- or right-click) to switch profiles manually
+#   - "Automatic" mode (default): AC -> on_ac, battery -> on_battery,
+#     low battery -> on_low_battery (all configurable)
+#   - manual picks apply immediately; unless locked, they clear on the next
+#     power-source change and return to Automatic
+#   - "Lock profile": a manual pick survives power changes (low battery still
+#     forces the safety profile, then restores your locked pick)
+#   - "Configure…": opens ~/.config/z13-power/service.conf
 #   - notifies (notify-send) on every switch and on external profile changes
 #
-# Runs as a user service (graphical-session.target). KDE PowerDevil Run Script
-# hooks are intentionally not used — this service replaces them.
-#
-# Config: ~/.config/z13-power/service.conf   [service] low_battery=15
+# Config: ~/.config/z13-power/service.conf
+#   [service]
+#   low_battery    = 15          # percent; below this on battery -> on_low_battery
+#   on_ac          = performance # mode applied when plugged in
+#   on_battery     = balanced    # mode applied on battery
+#   on_low_battery = silent      # mode applied below the threshold
 #
 # Usage:  z13-power-service
 #
@@ -24,8 +30,9 @@ import os
 import subprocess
 import sys
 
-from PyQt6.QtCore import QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QCursor, QAction, QIcon
+from PyQt6.QtCore import Qt, QPointF, QRectF, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import (QAction, QActionGroup, QColor, QCursor, QIcon,
+                         QPainter, QPen, QPolygonF, QPixmap)
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 import pyudev
@@ -40,6 +47,15 @@ MODES = {
     "lowpower": "Low power",
 }
 MODE_ORDER = ["performance", "balanced", "silent", "max", "lowpower"]
+MODE_COLORS = {
+    "performance": "#ff3131",
+    "balanced": "#2ec4ff",
+    "silent": "#3ddc6f",
+    "max": "#ff8c00",
+    "lowpower": "#ffd23f",
+}
+DEFAULT_CFG = {"low_battery": "15", "on_ac": "performance",
+               "on_battery": "balanced", "on_low_battery": "silent"}
 
 
 def read_power():
@@ -63,18 +79,6 @@ def read_power():
             except OSError:
                 pass
     return ac, capacity
-
-
-
-def z13_power(mode):
-    """Apply a z13-power mode; return True on success."""
-    try:
-        r = subprocess.run(
-            ["z13-power", mode], capture_output=True, text=True, timeout=30,
-        )
-        return r.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
 
 
 def z13_sig():
@@ -107,6 +111,17 @@ def z13_sig():
     return f"{profile}|{pl1}"
 
 
+def z13_power(mode):
+    """Apply a z13-power mode; return True on success."""
+    try:
+        r = subprocess.run(
+            ["z13-power", mode], capture_output=True, text=True, timeout=30,
+        )
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def notify(summary, body):
     try:
         subprocess.run(
@@ -120,12 +135,60 @@ def notify(summary, body):
 
 def load_config():
     cfg = configparser.ConfigParser()
-    cfg["service"] = {"low_battery": "15"}
+    cfg["service"] = dict(DEFAULT_CFG)
     try:
         cfg.read(CONFIG_PATH)
-        return int(cfg.get("service", "low_battery"))
-    except (configparser.Error, ValueError):
-        return 15
+    except configparser.Error:
+        pass
+    out = {}
+    for key, default in DEFAULT_CFG.items():
+        try:
+            value = cfg.get("service", key).strip()
+        except (configparser.Error, ValueError):
+            value = default
+        if key == "low_battery":
+            try:
+                out[key] = int(value)
+            except ValueError:
+                out[key] = 15
+        else:
+            out[key] = value if value in MODES else default
+    return out
+
+
+def ensure_config():
+    """Write a commented default config if none exists yet."""
+    if os.path.exists(CONFIG_PATH):
+        return
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    with open(CONFIG_PATH, "w") as f:
+        f.write("# z13-power service configuration\n"
+                "# Modes: performance, balanced, silent, max, lowpower\n"
+                "[service]\n"
+                "low_battery = 15\n"
+                "on_ac = performance\n"
+                "on_battery = balanced\n"
+                "on_low_battery = silent\n")
+
+
+def make_icon(color):
+    """ROG-style tray icon: dark tile + angular power bolt, tinted per mode."""
+    pm = QPixmap(64, 64)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setBrush(QColor("#15151a"))
+    p.setPen(QPen(QColor("#33333d"), 2))
+    p.drawRoundedRect(QRectF(2, 2, 60, 60), 12, 12)
+    p.setBrush(QColor(color))
+    p.setPen(Qt.PenStyle.NoPen)
+    bolt = QPolygonF([
+        QPointF(37, 6), QPointF(18, 36), QPointF(30, 36), QPointF(26, 58),
+        QPointF(47, 26), QPointF(34, 26), QPointF(43, 6),
+    ])
+    p.drawPolygon(bolt)
+    p.end()
+    return QIcon(pm)
 
 
 class PowerMonitor(QThread):
@@ -147,28 +210,51 @@ class PowerMonitor(QThread):
 class Service:
     def __init__(self, app):
         self.app = app
-        self.threshold = load_config()
-        self.override = False
+        self.cfg = load_config()
+        self.automatic = True
+        self.manual_mode = None
+        self.locked = False
         self.low_latched = False
         ac, _ = read_power()
         self.last_ac = ac
         self.last_sig = z13_sig()
         self._last_applied = None
+        self._last_notified = None
 
-        self.tray = QSystemTrayIcon(QIcon.fromTheme("preferences-system-power"))
+        self.tray = QSystemTrayIcon(make_icon(MODE_COLORS["performance"]))
         self.menu = QMenu()
-        self.actions = {}
+
+        # Modes + Automatic form an exclusive radio group.
+        self.group = QActionGroup(self.menu)
+        self.group.setExclusive(True)
+        self.mode_actions = {}
         for mode in MODE_ORDER:
             a = QAction(MODES[mode], self.menu, checkable=True)
             a.triggered.connect(lambda _c, m=mode: self.manual(m))
-            self.actions[mode] = a
+            self.group.addAction(a)
+            self.mode_actions[mode] = a
             self.menu.addAction(a)
+        self.auto_action = QAction("Automatic", self.menu, checkable=True)
+        self.auto_action.triggered.connect(lambda _c: self.choose_automatic())
+        self.group.addAction(self.auto_action)
+        self.menu.addAction(self.auto_action)
+
         self.menu.addSeparator()
+        self.lock_action = QAction("Lock profile", self.menu, checkable=True)
+        self.lock_action.toggled.connect(self.on_lock_toggled)
+        self.lock_action.setEnabled(False)
+        self.menu.addAction(self.lock_action)
+
+        self.menu.addSeparator()
+        configure_a = QAction("Configure\u2026", self.menu)
+        configure_a.triggered.connect(self.open_config)
+        self.menu.addAction(configure_a)
         quit_a = QAction("Quit", self.menu)
         quit_a.triggered.connect(self.app.quit)
         self.menu.addAction(quit_a)
+
         self.tray.setContextMenu(self.menu)
-        self.tray.activated.connect(lambda _r: self.menu.popup(QCursor.pos()))
+        self.tray.activated.connect(self.on_activated)
 
         self.monitor = PowerMonitor()
         self.monitor.event.connect(self.on_power_event)
@@ -179,7 +265,7 @@ class Service:
         self.poll_timer.timeout.connect(self.on_poll)
         self.poll_timer.start(3000)
 
-        # 30s: safety re-evaluation in case udev missed an event
+        # 30s: safety re-evaluation + config reload in case udev missed an event
         self.power_timer = QTimer()
         self.power_timer.timeout.connect(self.evaluate_power)
         self.power_timer.start(30000)
@@ -188,57 +274,120 @@ class Service:
         self.evaluate_power()
         self.tray.show()
 
+    def on_activated(self, reason):
+        # Plasma shows the context menu itself on right-click; open it
+        # explicitly for left-click and double-click.
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.DoubleClick):
+            self.menu.popup(QCursor.pos())
+
     def manual(self, mode):
         """User picked a mode from the tray menu."""
+        self.automatic = False
+        self.manual_mode = mode
+        self.lock_action.setEnabled(True)
         if self.apply(mode, force=True):
-            self.override = True
-            self.low_latched = False
+            self.update_tray()
+
+    def choose_automatic(self):
+        """Return to Automatic (service decides from power state)."""
+        self.set_automatic(announce=True)
+        self.evaluate_power()
+
+    def set_automatic(self, announce=False):
+        changed = not self.automatic
+        self.automatic = True
+        self.manual_mode = None
+        self.locked = False
+        self.lock_action.blockSignals(True)
+        self.lock_action.setChecked(False)
+        self.lock_action.setEnabled(False)
+        self.lock_action.blockSignals(False)
+        self.update_menu_checks()
+        self.update_tray()
+        if announce and changed:
+            notify("Power profile", "Automatic (per power state)")
+
+    def on_lock_toggled(self, checked):
+        self.locked = checked
+        self.update_tray()
 
     def on_power_event(self):
         self.evaluate_power()
 
     def evaluate_power(self):
+        self.cfg = load_config()
         ac, capacity = read_power()
         if ac != self.last_ac:
-            # Power source changed — a manual pick no longer stands.
-            self.override = False
             self.last_ac = ac
-        # Hard safety rule: low battery forces silent, even over a manual pick.
-        if not ac and capacity is not None and capacity <= self.threshold:
+            if not self.automatic and not self.locked:
+                # An unlocked manual pick clears on power-source change.
+                self.set_automatic()
+        low = not ac and capacity is not None and capacity <= self.cfg["low_battery"]
+        if low:
+            # Safety rule: low battery forces the configured profile.
             self.low_latched = True
-            self.apply("silent")
+            self.apply(self.cfg["on_low_battery"])
             return
         if self.low_latched:
-            # Charged back above the threshold (or on AC) — release the latch.
             self.low_latched = False
-            self.override = False
-        if self.override:
-            return  # user's manual choice stands until the power source changes
-        self.apply("performance" if ac else "balanced")
+            if not self.automatic:
+                self.apply(self.manual_mode)  # restore locked/manual pick
+                return
+        if self.automatic:
+            self.apply(self.cfg["on_ac"] if ac else self.cfg["on_battery"])
 
     def apply(self, mode, force=False):
         """Apply a mode; notify only when it actually changed (or force)."""
         if not z13_power(mode):
             notify("Power profile error", f"Failed to apply '{mode}'")
             return False
-        self.last_sig = z13_sig()
-        self.update_tray(mode)
-        if force or mode != self._last_applied:
-            notify(f"Power profile: {MODES[mode]}", self._body(mode))
         self._last_applied = mode
+        self.update_menu_checks()
+        self.update_tray()
+        if force or mode != self._last_notified:
+            notify(f"Power profile: {MODES[mode]}", self._body(mode))
+        self._last_notified = mode
         return True
 
     def _body(self, mode):
         ac, capacity = read_power()
         src = "AC" if ac else ("battery %d%%" % capacity if capacity is not None else "battery")
-        return f"{src} · {MODES[mode]}"
+        return f"{src} \u00b7 {MODES[mode]}"
 
-    def update_tray(self, mode):
-        for m, a in self.actions.items():
-            a.setChecked(m == mode)
-        self.tray.setToolTip(f"z13-power: {MODES[mode]}")
+    def update_menu_checks(self):
+        if self.automatic:
+            self.auto_action.setChecked(True)
+        elif self.manual_mode in self.mode_actions:
+            self.mode_actions[self.manual_mode].setChecked(True)
+        else:
+            # External pick with an unknown mode — nothing checked.
+            self.group.setExclusive(False)
+            self.auto_action.setChecked(False)
+            for a in self.mode_actions.values():
+                a.setChecked(False)
+            self.group.setExclusive(True)
+
+    def update_tray(self):
+        mode = self.manual_mode if not self.automatic else (self._last_applied or "performance")
+        color = MODE_COLORS.get(mode, "#b9b9c4")
+        self.tray.setIcon(make_icon(color))
+        state = "automatic" if self.automatic else ("locked" if self.locked else "manual")
+        label = MODES.get(mode, mode)
+        self.tray.setToolTip(f"z13-power: {label} ({state})")
         if not self.tray.isVisible():
             self.tray.show()
+
+    def open_config(self):
+        ensure_config()
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+        try:
+            if editor:
+                subprocess.Popen([editor, CONFIG_PATH])
+            else:
+                subprocess.Popen(["xdg-open", CONFIG_PATH])
+        except OSError:
+            notify("z13-power", f"Config: {CONFIG_PATH}")
 
     def on_poll(self):
         sig = z13_sig()
@@ -247,13 +396,17 @@ class Service:
         if sig != self.last_sig:
             # Changed by something outside the service (overlay, terminal, button).
             self.last_sig = sig
-            self.override = True
-            self.low_latched = False
-            notify("Power profile changed", f"Now: {sig.split('|')[0]} (set externally)")
-            self.update_tray(sig.split("|")[0])
+            if not self.locked:
+                self.automatic = False
+                self.lock_action.setEnabled(True)
+            self.update_menu_checks()
+            self.update_tray()
+            label = sig.split("|")[0]
+            notify("Power profile changed", f"Now: {label} (set externally)")
 
 
 def main():
+    ensure_config()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     service = Service(app)

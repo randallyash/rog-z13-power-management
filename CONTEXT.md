@@ -42,17 +42,31 @@ TDP arg order: `--pl1 PL1 --pl2 PL2 --pl3 PL3`. UV steps skip gracefully when
 
 ## Service behavior
 
-- **Tray menu**: 5 modes, current checked; manual pick sets `override=True`
-  (stands until the power SOURCE changes).
-- **Power source change** (udev `power_supply` event, plus 30s safety poll):
-  clears override → apply performance (AC) / balanced (battery).
-- **Low battery** (capacity <= `low_battery` from `~/.config/z13-power/service.conf`,
-  default 15): latches `silent` even over a manual pick; released above threshold.
-- **Startup**: applies the profile for the current power source.
+Menu = 5 modes + **Automatic** (exclusive QActionGroup) + **Lock profile**
+(checkbox, enabled only on a manual pick) + **Configure…** + Quit. Left- or
+right-click opens the menu (Plasma renders the context menu for right-click;
+left/double-click pops it at the cursor).
+
+State: `automatic` (default), `manual_mode`, `locked`.
+- **Automatic**: applies `on_ac` / `on_battery` / `on_low_battery` from config
+  on login, on udev power_supply events (30s safety poll fallback), and after
+  an unlocked manual pick is cleared.
+- **Manual pick**: applies immediately; unless **locked**, it clears on the
+  next power-source change → back to Automatic. Locked picks survive changes.
+- **Low battery** (capacity <= `low_battery`, configurable): latches the
+  configured `on_low_battery` profile EVEN over a locked/manual pick; restores
+  the locked pick when back above the threshold.
 - **3s profile poll**: `z13_sig()` = `z13ctl profile --get` label + TDP PL1.
-  If it changes externally (overlay/terminal/button) → notify + treat as override.
-  Signature needed because `profile --get` returns the active custom-profile
-  label (e.g. "custom") even when the platform profile changed.
+  External changes (overlay/terminal/button) → notify + treated as an unlocked
+  manual pick. Signature needed because `profile --get` returns the active
+  custom-profile label (e.g. "custom") even when the platform profile changed.
+- **Config** `~/.config/z13-power/service.conf` (created on first run;
+  `Configure…` opens it via $VISUAL/$EDITOR or xdg-open): keys `low_battery`,
+  `on_ac`, `on_battery`, `on_low_battery`; values validated against MODES,
+  reloaded every 30s (no restart needed).
+- **Tray icon**: QPainter-drawn ROG-style dark tile + lightning bolt, color
+  per mode (performance red, balanced cyan, silent green, max orange, lowpower
+  amber); tooltip shows mode + automatic/manual/locked.
 - **Notifications**: `notify-send` on every switch + external change. Single
   notifier — `z13-power` itself is silent.
 - Service PATH (systemd) does NOT include `~/.local/bin` — resolves z13-power
