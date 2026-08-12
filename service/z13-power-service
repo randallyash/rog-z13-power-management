@@ -79,7 +79,21 @@ CONFIG_TEMPLATE = """\
 # Battery percent at or below which `on_low_battery` applies (on battery only).
 low_battery = 15
 
-# Which mode to apply in each power state (used while the tray is on "Automatic").
+# Which MODE to apply in each power state, used while the tray is on "Automatic".
+#
+# Valid modes:  performance | balanced | silent | max | lowpower
+#   max=93W, performance=75W, balanced=52W, silent=20W, lowpower=5W
+#   (each one is defined in a [modes.<name>] section below).
+#
+# A MODE is a complete recipe: firmware profile + TDP limits + fan curve +
+# undervolt. It is NOT the same as the FIRMWARE PROFILE the CPU reports
+# (quiet / balanced / performance, written to platform_profile) — the
+# firmware profile is just one ingredient inside a mode. So write a MODE
+# name here, not a firmware profile.
+#
+# Behavior: plugged in  -> on_ac          -> e.g. performance
+#           unplugged    -> on_battery    -> e.g. balanced
+#           battery at/below low_battery% -> on_low_battery -> e.g. silent
 on_ac = performance
 on_battery = balanced
 on_low_battery = silent
