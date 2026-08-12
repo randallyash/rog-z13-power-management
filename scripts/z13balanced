@@ -1,6 +1,0 @@
-#!/bin/bash
-
-z13ctl profile --set balanced
-z13ctl tdp --set 52 --pl2 71 --pl3 70
-z13ctl fancurve --reset
-z13ctl undervolt --reset

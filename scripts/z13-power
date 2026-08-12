@@ -1,0 +1,129 @@
+#!/bin/bash
+#
+# z13-power — consolidated power profile manager for the ASUS ROG Flow Z13 (GZ302)
+#
+# Thin wrapper over z13ctl (github.com/dahui/z13ctl) that applies a tuned preset
+# in one command. Designed to be invoked by KDE PowerDevil "Run Script" hooks
+# (AC / Battery / Low Battery) or manually from a terminal / shortcut.
+#
+# Usage:  z13-power <mode>
+# Modes:  balanced | performance | max | silent | lowpower | status | toggle
+
+set -euo pipefail
+
+Z13CTL="$(command -v z13ctl || true)"
+
+die() { echo "z13-power: $*" >&2; exit 1; }
+
+require_z13ctl() {
+  [[ -n "$Z13CTL" ]] || die "z13ctl not found — install z13ctl-bin (AUR)"
+}
+
+ryzen_smu_loaded() {
+  grep -qw ryzen_smu_drv /proc/modules 2>/dev/null
+}
+
+# Undervolt needs the ryzen_smu kernel module; skip gracefully if absent so a
+# machine without it still gets profile + TDP + fan curve control.
+apply_undervolt() {
+  local value="$1"
+  if ! ryzen_smu_loaded; then
+    echo "z13-power: warning: ryzen_smu module not loaded — skipping undervolt" >&2
+    return 0
+  fi
+  z13ctl undervolt --set "$value"
+}
+
+reset_undervolt() {
+  ryzen_smu_loaded || return 0
+  z13ctl undervolt --reset
+}
+
+usage() {
+  cat <<'EOF'
+usage: z13-power <mode>
+
+modes:
+  balanced     balanced profile, TDP 52/71/70, fan curve reset, undervolt reset
+  performance  performance profile, TDP 75/93/93, fan curve reset, undervolt reset
+  max          performance profile, TDP 93 forced, undervolt reset
+  silent       quiet profile, TDP 20/40/40, undervolt -20 mV
+  lowpower     quiet profile, TDP 5 W, undervolt -25 mV
+  status       show current profile / TDP / fan curve / undervolt
+  toggle       toggle the z13gui overlay drawer service (requires z13gui-bin)
+  help         show this message
+EOF
+}
+
+case "${1:-}" in
+  balanced)
+    require_z13ctl
+    z13ctl profile --set balanced
+    z13ctl tdp --set 52 --pl2 71 --pl3 70
+    z13ctl fancurve --reset
+    reset_undervolt
+    ;;
+  performance)
+    require_z13ctl
+    z13ctl profile --set performance
+    z13ctl tdp --set 75 --pl1 75 --pl2 93 --pl3 93
+    z13ctl fancurve --reset
+    reset_undervolt
+    ;;
+  max)
+    require_z13ctl
+    z13ctl profile --set performance
+    z13ctl tdp --set 93 --force
+    reset_undervolt
+    ;;
+  silent)
+    require_z13ctl
+    z13ctl profile --set quiet
+    z13ctl tdp --set 20 --pl2 40 --pl3 40
+    z13ctl fancurve --reset
+    apply_undervolt -20
+    ;;
+  lowpower)
+    require_z13ctl
+    z13ctl profile --set quiet
+    z13ctl tdp --set 5
+    z13ctl fancurve --reset
+    apply_undervolt -25
+    ;;
+  status)
+    require_z13ctl
+    echo "## Z13 Profile:"
+    z13ctl profile --get 2>/dev/null || echo "  (unavailable)"
+    echo "## TDP:"
+    z13ctl tdp --get 2>/dev/null || echo "  (unavailable)"
+    echo "## Fan Curve:"
+    z13ctl fancurve --get 2>/dev/null || echo "  (unavailable)"
+    echo "## CPU Undervolt:"
+    z13ctl undervolt --get 2>/dev/null || echo "  (unavailable)"
+    ;;
+  toggle)
+    SERVICE="z13gui.service"
+    if ! systemctl --user list-unit-files 2>/dev/null | grep -qw "$SERVICE"; then
+      die "z13gui not installed — install z13gui-bin (AUR) to use the overlay toggle"
+    fi
+    if systemctl --user is-active --quiet "$SERVICE"; then
+      echo "Stopping $SERVICE..."
+      systemctl --user stop "$SERVICE"
+      systemctl --user is-active --quiet "$SERVICE" \
+        && die "failed to stop $SERVICE"
+      echo "$SERVICE stopped."
+    else
+      echo "Starting $SERVICE..."
+      systemctl --user start "$SERVICE"
+      systemctl --user is-active --quiet "$SERVICE" \
+        || die "failed to start $SERVICE"
+      echo "$SERVICE started."
+    fi
+    ;;
+  help|-h|--help|"")
+    usage
+    ;;
+  *)
+    die "unknown mode: '${1:-}' (run 'z13-power help' for usage)"
+    ;;
+esac

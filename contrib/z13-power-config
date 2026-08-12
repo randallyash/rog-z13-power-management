@@ -1,0 +1,29 @@
+#!/bin/bash
+#
+# z13-power-config — deploy the packaged KDE PowerDevil automation config.
+#
+# Writes ~/.config/powerdevilrc from the system template (/usr/share/z13-power-management/powerdevilrc),
+# backing up any existing file. Replaces the %BIN% placeholder with /usr/bin.
+#
+# Usage:  z13-power-config
+
+set -euo pipefail
+
+SRC="/usr/share/z13-power-management/powerdevilrc"
+TARGET="$HOME/.config/powerdevilrc"
+
+[[ -f "$SRC" ]] || { echo "z13-power-config: $SRC not found (package broken?)" >&2; exit 1; }
+mkdir -p "$HOME/.config"
+if [[ -f "$TARGET" ]]; then
+  cp "$TARGET" "$TARGET.bak.$(date +%Y%m%d%H%M%S)"
+  echo "Backed up $TARGET"
+fi
+sed "s|%BIN%|/usr/bin|g" "$SRC" > "$TARGET"
+cat <<'EOF'
+Deployed KDE PowerDevil hooks to ~/.config/powerdevilrc:
+  AC          -> /usr/bin/z13-power performance
+  Battery     -> /usr/bin/z13-power balanced
+  Low Battery -> /usr/bin/z13-power silent
+
+Log out and back in, then verify with:  z13-power status
+EOF

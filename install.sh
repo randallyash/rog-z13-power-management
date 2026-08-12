@@ -2,8 +2,8 @@
 #
 # install.sh — ROG Flow Z13 power management setup
 #
-# Installs the z13 power profile scripts, enables the z13ctl daemon stack,
-# and deploys the KDE PowerDevil automation (AC/Battery/LowBattery -> scripts).
+# Installs the z13-power profile manager, enables the z13ctl daemon stack,
+# and deploys the KDE PowerDevil automation (AC/Battery/LowBattery -> modes).
 #
 # Requirements:
 #   - 2025 ASUS ROG Flow Z13 (GZ302)
@@ -41,9 +41,9 @@ else
   WARN "z13gui not found. Optional: paru -S z13gui-bin  (needed only for the Meta+B overlay toggle)"
 fi
 
-# Optional: ryzen_smu (needed for undervolt commands in the scripts).
+# Optional: ryzen_smu (needed for undervolt; z13-power skips it gracefully).
 if ! grep -qw ryzen_smu_drv /proc/modules 2>/dev/null; then
-  WARN "ryzen_smu kernel module not loaded — undervolt settings in the scripts will be skipped."
+  WARN "ryzen_smu kernel module not loaded — undervolt modes will skip the UV step."
   WARN "Install/load it if you want undervolt: e.g. paru -S ryzen_smu-dkms-git"
 fi
 
@@ -53,15 +53,13 @@ if ! id -nG | tr ' ' '\n' | grep -qw users; then
   WARN "  Run: sudo usermod -aG users \"$USER\"   then log out and back in."
 fi
 
-# ── 1. Install the scripts ────────────────────────────────────────────────────
+# ── 1. Install the profile manager ─────────────────────────────────────────────
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-for script in z13balanced z13lowpower z13max z13performance z13silent z13status z13toggle.sh; do
-  cp "$SCRIPT_DIR/scripts/$script" "$BIN_DIR/$script"
-  chmod +x "$BIN_DIR/$script"
-done
-OK "Installed 7 scripts to $BIN_DIR"
+cp "$SCRIPT_DIR/scripts/z13-power" "$BIN_DIR/z13-power"
+chmod +x "$BIN_DIR/z13-power"
+OK "Installed z13-power to $BIN_DIR"
 
 # ── 2. z13ctl device permissions (udev rules + perms service) ─────────────────
 if [[ ! -f /etc/udev/rules.d/99-z13ctl.rules ]]; then
@@ -94,11 +92,11 @@ if [[ -d "$HOME/.config" ]]; then
     cp "$TARGET" "$TARGET.bak.$(date +%Y%m%d%H%M%S)"
     OK "Backed up existing $TARGET"
   fi
-  sed "s|%HOME%|$HOME|g" "$SCRIPT_DIR/kde/powerdevilrc" > "$TARGET"
+  sed "s|%BIN%|$BIN_DIR|g" "$SCRIPT_DIR/kde/powerdevilrc" > "$TARGET"
   OK "Deployed KDE PowerDevil automation to $TARGET"
-  INFO "  AC          -> z13performance"
-  INFO "  Battery     -> z13balanced"
-  INFO "  Low Battery -> z13silent"
+  INFO "  AC          -> z13-power performance"
+  INFO "  Battery     -> z13-power balanced"
+  INFO "  Low Battery -> z13-power silent"
 else
   ERR "No ~/.config directory — this needs to run as your normal desktop user."
 fi
@@ -113,7 +111,7 @@ Remaining manual steps (KDE GUI):
   2. System Settings -> Power Management -> verify the three "Run Script"
      actions under AC / Battery / Low Battery profiles.
   3. (Optional) For the Meta+B overlay toggle button: add a global shortcut
-     or panel button that runs  ~/.local/bin/z13toggle.sh  (requires z13gui).
+     or panel button that runs  ~/.local/bin/z13-power toggle  (requires z13gui).
 
-To verify: run  ~/.local/bin/z13status
+To verify: run  ~/.local/bin/z13-power status
 EOF
