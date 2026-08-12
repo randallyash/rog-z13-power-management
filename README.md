@@ -39,6 +39,8 @@ project exists**.
 - `ryzen_smu` kernel module (optional — needed only for undervolt; without it
   `z13-power` warns and skips the undervolt step)
 - [rog-z13-trackpad-fix](https://forgejo.fifthdread.com/Fifthdread/rog-z13-trackpad-fix) (optional — enables "Disable While Typing")
+- `notify-send` / `libnotify` (optional — KDE notification on profile switch;
+  `z13-power` stays silent if it's missing)
 
 ## Install
 

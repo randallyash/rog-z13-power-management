@@ -39,6 +39,15 @@ reset_undervolt() {
   z13ctl undervolt --reset
 }
 
+# Fire a KDE notification on profile switch. No-op if notify-send isn't
+# installed, and guarded so a missing notification daemon never aborts a
+# profile switch (set -e is active).
+notify() {
+  local summary="$1" body="$2" icon="${3:-preferences-system-power}"
+  command -v notify-send >/dev/null 2>&1 || return 0
+  notify-send -a z13-power -i "$icon" -u normal -t 3000 "$summary" "$body" >/dev/null 2>&1 || true
+}
+
 usage() {
   cat <<'EOF'
 usage: z13-power <mode>
@@ -62,6 +71,7 @@ case "${1:-}" in
     z13ctl tdp --set 52 --pl2 71 --pl3 70
     z13ctl fancurve --reset
     reset_undervolt
+    notify "Power profile: balanced" "TDP 52/71/70 W · undervolt reset"
     ;;
   performance)
     require_z13ctl
@@ -69,12 +79,14 @@ case "${1:-}" in
     z13ctl tdp --set 75 --pl1 75 --pl2 93 --pl3 93
     z13ctl fancurve --reset
     reset_undervolt
+    notify "Power profile: performance" "TDP 75/93/93 W · undervolt reset"
     ;;
   max)
     require_z13ctl
     z13ctl profile --set performance
     z13ctl tdp --set 93 --force
     reset_undervolt
+    notify "Power profile: max" "TDP 93 W forced"
     ;;
   silent)
     require_z13ctl
@@ -82,6 +94,7 @@ case "${1:-}" in
     z13ctl tdp --set 20 --pl2 40 --pl3 40
     z13ctl fancurve --reset
     apply_undervolt -20
+    notify "Power profile: silent" "TDP 20/40/40 W · -20 mV undervolt"
     ;;
   lowpower)
     require_z13ctl
@@ -89,6 +102,7 @@ case "${1:-}" in
     z13ctl tdp --set 5
     z13ctl fancurve --reset
     apply_undervolt -25
+    notify "Power profile: low power" "TDP 5 W · -25 mV undervolt"
     ;;
   status)
     require_z13ctl

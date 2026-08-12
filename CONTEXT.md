@@ -41,6 +41,10 @@ return 0). `toggle` errors out if the z13gui unit is missing (checked via
 `systemctl --user list-unit-files | grep` — list-unit-files alone returns 0
 even for nonexistent units).
 
+Profile modes fire a KDE notification via `notify-send` (optdepends
+`libnotify`) when applied — no-op if notify-send is absent, guarded with
+`|| true` so a missing notification daemon never aborts a switch (set -e).
+
 ## Automation topology (original machine)
 
 - **KDE PowerDevil** (`~/.config/powerdevilrc`):
