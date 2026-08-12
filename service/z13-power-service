@@ -60,7 +60,7 @@ DEFAULT_MODES = {
     "silent": {"profile": "quiet", "tdp": "20 40 40",
                "tdp_force": "false", "fancurve": "reset", "undervolt": "-20"},
     "max": {"profile": "performance", "tdp": "93",
-            "tdp_force": "true", "fancurve": "reset", "undervolt": "reset"},
+            "tdp_force": "true", "undervolt": "reset"},
     "lowpower": {"profile": "quiet", "tdp": "5",
                  "tdp_force": "false", "fancurve": "reset", "undervolt": "-25"},
 }
@@ -128,7 +128,8 @@ on_low_battery = silent
 profile = performance
 tdp = 93
 tdp_force = true
-fancurve = reset
+# No fancurve line: reset is refused above 75W PL1 — the --force safety curve
+# (50% PWM floor -> 100% at 80C) stays in effect at 93W.
 undervolt = reset
 
 [modes.performance]
@@ -245,11 +246,15 @@ def apply_mode(mode_def):
     if str(mode_def.get("tdp_force", "false")).strip().lower() in ("true", "yes", "1"):
         args.append("--force")
     z13ctl(args)
-    fancurve = str(mode_def.get("fancurve", "reset")).strip()
-    if fancurve in ("reset", "auto"):
-        z13ctl(["fancurve", "--reset"])
-    else:
-        z13ctl(["fancurve", "--set", fancurve])
+    # Fan curve: only touched if the mode defines one (max omits it — reset
+    # is refused above 75W PL1, where --force installs its own safety curve).
+    fancurve = mode_def.get("fancurve")
+    if fancurve is not None:
+        fancurve = str(fancurve).strip()
+        if fancurve in ("reset", "auto"):
+            z13ctl(["fancurve", "--reset"])
+        else:
+            z13ctl(["fancurve", "--set", fancurve])
     undervolt = str(mode_def.get("undervolt", "reset")).strip()
     if undervolt != "reset" and not ryzen_smu_loaded():
         return True  # no ryzen_smu — profile/TDP/fancurve still applied
@@ -294,11 +299,11 @@ def load_config():
         if name not in MODES:
             continue
         mode_def = dict(DEFAULT_MODES[name])
-        for key in mode_def:
+        for key in ("profile", "tdp", "tdp_force", "fancurve", "undervolt"):
             try:
                 mode_def[key] = cfg.get(section, key).strip()
             except configparser.Error:
-                pass
+                pass  # keep the default (max has no fancurve by design)
         if mode_def["profile"] not in ("quiet", "balanced", "performance"):
             mode_def["profile"] = DEFAULT_MODES[name]["profile"]
         out["modes"][name] = mode_def
