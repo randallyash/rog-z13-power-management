@@ -185,34 +185,27 @@ def read_power():
     return ac, capacity
 
 
-def z13_sig():
-    """Fingerprint of the applied state: profile label + TDP PL1.
-
-    z13ctl's `profile --get` reports the active (possibly custom) profile
-    label, which alone is not enough — combine it with the PL1 power limit so
-    real changes (overlay, terminal, button) are detectable.
-    """
-    profile = ""
-    pl1 = ""
+def z13_profile():
+    """Current profile label as reported by z13ctl (or ''). Lightweight."""
     try:
-        profile = subprocess.run(
+        return subprocess.run(
             ["z13ctl", "profile", "--get"],
             capture_output=True, text=True, timeout=5,
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
-        pass
+        return ""
+
+
+def run_diagnose():
+    """Run `z13-power diagnose` and return its report text."""
     try:
-        out = subprocess.run(
-            ["z13ctl", "tdp", "--get"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout
-        for line in out.splitlines():
-            if "PL1" in line:
-                pl1 = line.split(":")[-1].strip()
-                break
+        r = subprocess.run(
+            ["z13-power", "diagnose"],
+            capture_output=True, text=True, timeout=30,
+        )
+        return (r.stdout + r.stderr).strip() or "(no output)"
     except (OSError, subprocess.SubprocessError):
-        pass
-    return f"{profile}|{pl1}"
+        return "z13-power diagnose failed to run"
 
 
 def z13ctl(args):
@@ -225,11 +218,8 @@ def z13ctl(args):
 
 
 def ryzen_smu_loaded():
-    try:
-        with open("/proc/modules") as f:
-            return "ryzen_smu_drv" in f.read()
-    except OSError:
-        return False
+    # Module is named `ryzen_smu`; its sysfs interface is what z13ctl uses.
+    return os.path.isdir("/sys/kernel/ryzen_smu_drv")
 
 
 def apply_mode(mode_def):
@@ -365,7 +355,7 @@ class Service:
         self.low_latched = False
         ac, _ = read_power()
         self.last_ac = ac
-        self.last_sig = z13_sig()
+        self.last_profile = z13_profile()
         self._last_applied = None
         self._last_notified = None
 
@@ -394,6 +384,9 @@ class Service:
         self.menu.addAction(self.lock_action)
 
         self.menu.addSeparator()
+        diagnose_a = QAction("Diagnose\u2026", self.menu)
+        diagnose_a.triggered.connect(self.show_diagnose)
+        self.menu.addAction(diagnose_a)
         configure_a = QAction("Configure\u2026", self.menu)
         configure_a.triggered.connect(self.open_config)
         self.menu.addAction(configure_a)
@@ -408,10 +401,10 @@ class Service:
         self.monitor.event.connect(self.on_power_event)
         self.monitor.start()
 
-        # 3s: notify on externally-changed profile
+        # 5s: notify on externally-changed profile (single cheap z13ctl call)
         self.poll_timer = QTimer()
         self.poll_timer.timeout.connect(self.on_poll)
-        self.poll_timer.start(3000)
+        self.poll_timer.start(5000)
 
         # 30s: safety re-evaluation + config reload in case udev missed an event
         self.power_timer = QTimer()
@@ -421,6 +414,14 @@ class Service:
     def start(self):
         self.evaluate_power()
         self.tray.show()
+        self.startup_diagnose()
+
+    def startup_diagnose(self):
+        report = run_diagnose()
+        fails = [line for line in report.splitlines() if line.startswith("[FAIL]")]
+        if fails:
+            notify("z13-power: setup problem",
+                   " · ".join(fails) or "run 'z13-power diagnose' for details")
 
     def on_activated(self, reason):
         # Right-click: Plasma renders the context menu natively. Left/middle
@@ -498,6 +499,7 @@ class Service:
         if not apply_mode(mode_def):
             notify("Power profile error", f"Failed to apply '{mode}'")
             return False
+        self.last_profile = z13_profile()
         self._last_applied = mode
         self.update_menu_checks()
         self.update_tray()
@@ -544,21 +546,26 @@ class Service:
                 subprocess.Popen(["xdg-open", CONFIG_PATH])
         except OSError:
             notify("z13-power", f"Config: {CONFIG_PATH}")
+    def show_diagnose(self):
+        from PyQt6.QtWidgets import QMessageBox
+        box = QMessageBox()
+        box.setWindowTitle("z13-power diagnose")
+        box.setText(run_diagnose())
+        box.exec()
 
     def on_poll(self):
-        sig = z13_sig()
-        if not sig:
+        profile = z13_profile()
+        if not profile:
             return
-        if sig != self.last_sig:
+        if profile != self.last_profile:
             # Changed by something outside the service (overlay, terminal, button).
-            self.last_sig = sig
+            self.last_profile = profile
             if not self.locked:
                 self.automatic = False
                 self.lock_action.setEnabled(True)
             self.update_menu_checks()
             self.update_tray()
-            label = sig.split("|")[0]
-            notify("Power profile changed", f"Now: {label} (set externally)")
+            notify("Power profile changed", f"Now: {profile} (set externally)")
 
 
 def main():

@@ -74,6 +74,16 @@ State: `automatic` (default), `manual_mode`, `locked`.
   xdg-open). Template written on first run with extensive comments (PL1/PL2/PL3
   semantics + 75W/force rule, fan-curve point format + profile-change gotcha,
   CO safety range, ryzen_smu requirement).
+- **Polling is slim**: 5s poll = ONE `z13ctl profile --get` call (external
+  change detection; TDP-only changes won't notify). Power events are udev-driven
+  (zero idle cost) + a 30s safety `evaluate_power`. No other periodic work.
+- **Diagnose**: `z13-power diagnose` subcommand checks hardware (DMI), z13ctl,
+  users group, udev rules, sysfs writability, daemon, `z13ctl status`, ryzen_smu,
+  notify-send — each with a fix; exit 0/1. Tray menu has **Diagnose…**
+  (QMessageBox) and the service runs it at startup, notifying only on FAIL.
+- **ryzen_smu detection**: module name in /proc/modules is `ryzen_smu` (not
+  `ryzen_smu_drv`); check `/sys/kernel/ryzen_smu_drv` dir instead. This bug
+  silently skipped undervolt on this machine until fixed.
 - **Tray icon**: QPainter-drawn ROG-style dark tile + lightning bolt, color
   per mode (performance red, balanced cyan, silent green, max orange, lowpower
   amber); tooltip shows mode + automatic/manual/locked.

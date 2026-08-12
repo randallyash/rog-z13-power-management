@@ -40,6 +40,9 @@ One command, seven modes (`z13-power <mode>`), plus a tray app:
   per mode, fully commented
 - **Notifications** — KDE popup on every switch, and when a profile is changed
   from outside the service (overlay, terminal, Armoury Crate button)
+- **Diagnose…** — runs `z13-power diagnose` (hardware, permissions, daemon,
+  modules) and shows the report with fixes; also checked at service startup
+  (only notifies if something is wrong)
 
 The low-battery tier is the reason this project exists — z13ctl's own autoswitch
 only supports AC/battery.
@@ -79,9 +82,12 @@ paru -Sy --pkgbuilds
 
 ```bash
 paru -S z13-power-git
-z13-power-config             # deploy KDE display/DPMS settings (optional)
-systemctl --user enable --now z13-power-service
 ```
+
+Dependencies are pulled automatically by paru (`z13ctl-bin`, `python-pyqt6`,
+`python-pyudev`, `libnotify`), and the install hook **enables + starts the tray
+service** for you — no extra commands. Installed as root (no paru)? It
+auto-starts at your next login via a user preset.
 
 **Or from source:**
 
@@ -101,9 +107,13 @@ Either path:
 Then **log out and back in** (for group changes), and verify:
 
 ```bash
+z13-power diagnose
 z13-power status
-systemctl --user status z13-power-service
 ```
+
+`z13-power diagnose` checks hardware, permissions, the daemon, and modules,
+and tells you exactly what to fix if anything's wrong (on a fresh machine
+that's usually: `sudo z13ctl setup`, then re-login for the `users` group).
 
 A tray icon should appear — click it to switch profiles manually.
 

@@ -20,7 +20,9 @@ require_z13ctl() {
 }
 
 ryzen_smu_loaded() {
-  grep -qw ryzen_smu_drv /proc/modules 2>/dev/null
+  # Module is named `ryzen_smu` (built-in or loadable); its sysfs interface
+  # is what z13ctl actually uses.
+  [[ -d /sys/kernel/ryzen_smu_drv ]]
 }
 
 # Undervolt needs the ryzen_smu kernel module; skip gracefully if absent so a
@@ -54,8 +56,81 @@ modes:
   lowpower     quiet profile, TDP 5 W, undervolt -25 mV
   status       show current profile / TDP / fan curve / undervolt
   toggle       toggle the z13gui overlay drawer service (requires z13gui-bin)
+  diagnose     check z13 setup (hardware, perms, daemon, modules) and show fixes
   help         show this message
 EOF
+}
+
+diagnose() {
+  local fails=0 warns=0
+  local product
+  product="$(cat /sys/class/dmi/id/product_name 2>/dev/null)"
+  if [[ "$product" == *"ROG Flow Z13"* ]]; then
+    printf '[ OK ] Hardware: %s\n' "$product"
+  else
+    printf '[WARN] Hardware: %s is not a ROG Flow Z13 — tuned for the GZ302\n' "${product:-unknown}"
+    warns=$((warns+1))
+  fi
+  if command -v z13ctl >/dev/null 2>&1; then
+    printf '[ OK ] z13ctl: %s\n' "$(z13ctl --version 2>/dev/null | head -1)"
+  else
+    printf '[FAIL] z13ctl: not installed — run: paru -S z13ctl-bin\n'
+    fails=$((fails+1))
+  fi
+  if id -nG 2>/dev/null | tr ' ' '\n' | grep -qw users; then
+    printf '[ OK ] users group: member\n'
+  else
+    printf '[FAIL] users group: not a member — run: sudo usermod -aG users "$USER"  (then log out/in)\n'
+    fails=$((fails+1))
+  fi
+  if [[ -f /etc/udev/rules.d/99-z13ctl.rules ]]; then
+    printf '[ OK ] udev rules: 99-z13ctl.rules present\n'
+  else
+    printf '[FAIL] udev rules: missing — run: sudo z13ctl setup\n'
+    fails=$((fails+1))
+  fi
+  local pp
+  pp="$(ls /sys/class/platform-profile/*/profile 2>/dev/null | head -1)"
+  if [[ -n "$pp" && -w "$pp" ]]; then
+    printf '[ OK ] sysfs: platform-profile writable\n'
+  else
+    printf '[FAIL] sysfs: platform-profile not writable — run: sudo z13ctl setup  (then log out/in)\n'
+    fails=$((fails+1))
+  fi
+  if systemctl --user is-active --quiet z13ctl.service 2>/dev/null; then
+    printf '[ OK ] daemon: z13ctl.service active\n'
+  else
+    printf '[WARN] daemon: z13ctl.service not running — run: systemctl --user enable --now z13ctl\n'
+    warns=$((warns+1))
+  fi
+  if z13ctl status >/dev/null 2>&1; then
+    printf '[ OK ] z13ctl status: reads hardware\n'
+  else
+    printf '[FAIL] z13ctl status: cannot read hardware — check group + udev rules\n'
+    fails=$((fails+1))
+  fi
+  if [[ -d /sys/kernel/ryzen_smu_drv ]]; then
+    printf '[ OK ] ryzen_smu: undervolt available\n'
+  else
+    printf '[WARN] ryzen_smu: not loaded — undervolt steps are skipped (paru -S ryzen_smu-dkms-git)\n'
+    warns=$((warns+1))
+  fi
+  if command -v notify-send >/dev/null 2>&1; then
+    printf '[ OK ] notify-send: notifications available\n'
+  else
+    printf '[WARN] notify-send: not found — install libnotify for popups\n'
+    warns=$((warns+1))
+  fi
+  printf '\nSummary: %d failure(s), %d warning(s).\n' "$fails" "$warns"
+  if [[ "$fails" -gt 0 ]]; then
+    printf 'Next steps:\n'
+    printf '  sudo z13ctl setup                    # udev rules + sysfs permissions\n'
+    printf '  sudo usermod -aG users "$USER"       # device access group\n'
+    printf '  # then log out and back in, and re-run:  z13-power diagnose\n'
+    return 1
+  fi
+  printf 'All checks passed.\n'
+  return 0
 }
 
 case "${1:-}" in
@@ -127,6 +202,9 @@ case "${1:-}" in
         || die "failed to start $SERVICE"
       echo "$SERVICE started."
     fi
+    ;;
+  diagnose)
+    diagnose
     ;;
   help|-h|--help|"")
     usage
