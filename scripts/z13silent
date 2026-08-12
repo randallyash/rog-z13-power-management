@@ -1,0 +1,6 @@
+#!/bin/bash
+
+z13ctl profile --set quiet
+z13ctl tdp --set 20 --pl2 40 --pl3 40
+z13ctl fancurve --reset
+z13ctl undervolt --set -20

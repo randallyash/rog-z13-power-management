@@ -1,0 +1,5 @@
+#!/bin/bash
+
+z13ctl profile --set performance
+z13ctl tdp --set 93 --force
+z13ctl undervolt --reset

@@ -1,0 +1,1 @@
+echo "## Z13 Profile:" && z13ctl profile --get && echo "## TDP:" && z13ctl tdp --get && echo "## Fan Curve:" && z13ctl fancurve --get && echo "## CPU Undervolt:" && z13ctl undervolt --get
