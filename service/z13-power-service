@@ -43,7 +43,7 @@ MODES = {
     "max": "Max",
     "lowpower": "Low power",
 }
-MODE_ORDER = ["performance", "balanced", "silent", "max", "lowpower"]
+MODE_ORDER = ["max", "performance", "balanced", "silent", "lowpower"]
 MODE_COLORS = {
     "performance": "#ff3131",
     "balanced": "#2ec4ff",
@@ -124,6 +124,13 @@ on_low_battery = silent
 #                them on startup/resume.
 # -----------------------------------------------------------------------------
 
+[modes.max]
+profile = performance
+tdp = 93
+tdp_force = true
+fancurve = reset
+undervolt = reset
+
 [modes.performance]
 profile = performance
 tdp = 75 93 93
@@ -144,13 +151,6 @@ tdp = 20 40 40
 tdp_force = false
 fancurve = reset
 undervolt = -20
-
-[modes.max]
-profile = performance
-tdp = 93
-tdp_force = true
-fancurve = reset
-undervolt = reset
 
 [modes.lowpower]
 profile = quiet

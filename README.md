@@ -17,10 +17,10 @@ One command, seven modes (`z13-power <mode>`), plus a tray app:
 
 | Mode | Profile | TDP (W) | Undervolt | Used for |
 |------|---------|---------|-----------|----------|
+| `max` | performance | 93 forced | reset | manual |
 | `performance` | performance | 75 / 75 / 93 / 93 | reset | **AC** |
 | `balanced` | balanced | 52 / 71 / 70 | reset | **Battery** |
 | `silent` | quiet | 20 / 40 / 40 | -20 mV | **Low battery** |
-| `max` | performance | 93 forced | reset | manual |
 | `lowpower` | quiet | 5 | -25 mV | manual |
 | `status` | — | shows current state | — | manual |
 | `toggle` | — | toggles z13gui overlay drawer | — | manual |
