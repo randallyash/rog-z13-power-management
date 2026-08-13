@@ -141,9 +141,17 @@ State: `automatic` (default), `manual_mode`, `locked`.
   replaced it; the pkgbuilds PKGBUILD now ships `z13-power-settings`.)
 - package(): installs z13-power, z13-power-service, z13-power-settings +
   `/usr/lib/systemd/user/` unit, z13-power-config, powerdevilrc, LICENSE.
+- The packaged service's `.install` hook: enable+start on install;
+  daemon-reload + restart on upgrade (new code deploys without re-login);
+  stop+disable+cleanup on remove. Re-enters the user manager via
+  `sudo -u $SUDO_USER` — a root-shell pacman run skips it (with a warning).
 - NOTE: the PKGBUILD builds from the REMOTE source — `service/z13-power-settings`
   must exist in the pushed `main` branch or `makepkg` fails at `install:`.
   Push this repo before publishing pkgbuilds changes that touch package().
+- MANDATORY: every code push to this repo must bump the pkgbuilds PKGBUILD
+  `pkgver=` to `rev-count.commit`, regenerate + commit `.SRCINFO`
+  (`makepkg --printsrcinfo > z13-power-git/.SRCINFO`), and push the pkgbuilds
+  repo, in the same change (paru does not devel-detect pkgbuild-repo packages).
 
 ## Per-unit tuning caveat
 

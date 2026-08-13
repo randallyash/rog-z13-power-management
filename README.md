@@ -86,7 +86,7 @@ curl -fsSL https://5d.fyi/addrepo | bash
 Prefer not to run a script? Add the repo by hand, then sync:
 
 ```bash
-mkdir -p ~/.config/paru && printf '[fifthdread]\nUrl = https://forgejo.fifthdread.com/Fifthdread/pkgbuilds.git\nGenerateSrcinfo\nSkipReview\n' >> ~/.config/paru/paru.conf
+mkdir -p ~/.config/paru && printf '[fifthdread]\nUrl = https://forgejo.fifthdread.com/Fifthdread/pkgbuilds.git\nSkipReview\n' >> ~/.config/paru/paru.conf
 paru -Sy --pkgbuilds
 ```
 
