@@ -38,9 +38,6 @@ One command, six modes (`z13-power <mode>`) plus a settings window, and a tray a
   clear on the next plug/unplug and return to Automatic
 - **Lock profile** — a manual pick survives power changes (low battery still
   forces the safety profile, then restores your locked pick)
-- **Configure…** — opens `~/.config/z13-power/service.conf`: every z13ctl call
-  it makes (profile, TDP limits, fan curve, undervolt) is defined there,
-  per mode, fully commented
 - **Notifications** — KDE popup on every switch, and when a profile is changed
   from outside the service (overlay, terminal, Armoury Crate button)
 - **Diagnose…** — runs `z13-power diagnose` (hardware, permissions, daemon,
@@ -55,6 +52,9 @@ One command, six modes (`z13-power <mode>`) plus a settings window, and a tray a
   reset to firmware auto (75 W PL1 safety rules enforced).
 - **Battery** — charge limit slider (40–100%), shows the current limit.
 - **Power** — panel overdrive and boot sound toggles.
+- **Profiles** — which mode runs on AC / battery / low battery and the
+  low-battery threshold, written back to `service.conf`; "Open config file…"
+  exposes the raw file for per-mode TDP / fan curve / undervolt tuning.
 - **Telemetry** — live APU temperature, fan RPM, profile, TDP, power source.
 Opened from the tray menu (**Settings…**) or with `z13-power settings` (the
 Meta+B panel button).
@@ -133,7 +133,8 @@ A tray icon should appear — click it to switch profiles manually.
 ## Configuration
 
 `~/.config/z13-power/service.conf` (created on first run with full inline
-documentation; `Configure…` in the tray menu opens it). The `[service]` section
+documentation; the settings window's **Profiles** tab edits it, and its
+"Open config file…" button opens the raw file). The `[service]` section
 maps power states to modes; each `[modes.<name>]` section defines exactly what
 `z13ctl` commands run for that profile:
 

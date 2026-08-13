@@ -51,7 +51,7 @@ heavily-commented service.conf so a ConfigParser rewrite can't clobber docs.
 ## Service behavior
 
 Menu = 5 modes + **Automatic** (exclusive QActionGroup) + **Lock profile**
-(checkbox, enabled only on a manual pick) + **Configure…** + **Settings…**
+(checkbox, enabled only on a manual pick) + **Diagnose…** + **Settings…**
 (launches `z13-power-settings`) + **Quit**. Left/middle
 click CYCLES to the next profile (Trigger); right-click = Plasma-native menu.
 (Menu popups on Plasma Wayland are position-unreliable — that's why left-click
@@ -79,8 +79,10 @@ State: `automatic` (default), `manual_mode`, `locked`.
   External changes (overlay/terminal/button) → notify + treated as an unlocked
   manual pick. Signature needed because `profile --get` returns the active
   custom-profile label (e.g. "custom") even when the platform profile changed.
-- **Config** reloaded every 30s; `Configure…` opens it ($VISUAL/$EDITOR or
-  xdg-open). Template written on first run with extensive comments (PL1/PL2/PL3
+- **Config** reloaded every 30s; the settings window's Profiles tab edits the
+  `[service]` values (AC/battery/low-battery modes + threshold) and its
+  "Open config file…" button opens the raw file ($VISUAL/$EDITOR or xdg-open).
+  Template written on first run with extensive comments (PL1/PL2/PL3
   semantics + 75W/force rule, fan-curve point format + profile-change gotcha,
   CO safety range, ryzen_smu requirement).
 - **Polling is slim**: 5s poll = ONE `z13ctl profile --get` call (external

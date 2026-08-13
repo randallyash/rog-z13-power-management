@@ -10,6 +10,7 @@
 #   - Battery:    batterylimit --get / --set (charge cap 40–100)
 #   - Power:      paneloverdrive, bootsound (firmware attributes)
 #   - Telemetry:  live status readouts (APU temp, fan RPM, profile, TDP)
+#   - Profiles:   service.conf [service] section (AC/battery/low-battery modes)
 #
 # Lighting selections are saved to ~/.config/z13-power/lighting.conf; the tray
 # service re-applies them at login.
@@ -20,6 +21,7 @@
 
 import configparser
 import os
+import re
 import subprocess
 import sys
 
@@ -31,6 +33,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox,
                              QTabWidget, QVBoxLayout, QWidget)
 
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
+CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
 
 LIGHTING_MODES = ["static", "breathe", "cycle", "rainbow", "strobe", "off"]
 BRIGHTNESS_LEVELS = ["off", "low", "medium", "high"]
@@ -103,6 +106,63 @@ def apply_lighting(lighting):
             f"Lighting: {lighting['mode']}")
 
 
+# ── service config ────────────────────────────────────────────────────────────
+
+CONFIG_DEFAULTS = {
+    "low_battery": "15",
+    "on_ac": "performance",
+    "on_battery": "balanced",
+    "on_low_battery": "silent",
+}
+
+VALID_MODES = ["performance", "balanced", "silent", "max", "lowpower"]
+
+
+def load_service_config():
+    """Read the [service] section of service.conf; return {key: value}."""
+    cfg = configparser.ConfigParser()
+    cfg.read(CONFIG_PATH)
+    out = dict(CONFIG_DEFAULTS)
+    if cfg.has_section("service"):
+        for key in out:
+            try:
+                value = cfg.get("service", key).strip()
+                if value:
+                    out[key] = value
+            except configparser.Error:
+                pass
+    return out
+
+
+def save_service_config(updates):
+    """Rewrite the given [service] keys in service.conf, preserving every
+    comment and the other sections (mode recipes). Creates a minimal file if
+    none exists. Returns the path written."""
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH) as f:
+            lines = f.readlines()
+    else:
+        lines = ["[service]\n"]
+    start = next((i for i, ln in enumerate(lines) if ln.strip() == "[service]"),
+                 None)
+    if start is None:
+        lines.append("\n[service]\n")
+        start = len(lines) - 1
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i].startswith("[")), len(lines))
+    for key, value in updates.items():
+        pattern = re.compile(rf"^({re.escape(key)}\s*=\s*).*$")
+        for i in range(start + 1, end):
+            if pattern.match(lines[i]):
+                lines[i] = pattern.sub(lambda m: m.group(1) + value, lines[i])
+                break
+        else:
+            lines.insert(end, f"{key} = {value}\n")
+            end += 1
+    with open(CONFIG_PATH, "w") as f:
+        f.writelines(lines)
+    return CONFIG_PATH
 # ── status / telemetry parsing ───────────────────────────────────────────────
 
 def z13_status():
@@ -538,6 +598,87 @@ class TelemetryTab(QWidget):
                 self.fields[key].setText(st[src])
 
 
+class ConfigTab(QWidget):
+    """Edit the [service] section: which mode each power state uses."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+
+        self.on_ac = QComboBox()
+        self.on_battery = QComboBox()
+        self.on_low = QComboBox()
+        for cb in (self.on_ac, self.on_battery, self.on_low):
+            cb.addItems(VALID_MODES)
+        self.threshold = QSpinBox()
+        self.threshold.setRange(5, 50)
+        self.threshold.setSuffix(" %")
+
+        form = QFormLayout()
+        form.addRow("On AC:", self.on_ac)
+        form.addRow("On battery:", self.on_battery)
+        form.addRow("On low battery:", self.on_low)
+        form.addRow("Low battery threshold:", self.threshold)
+        v.addLayout(form)
+
+        note = QLabel("These decide which profile the tray service applies in "
+                      "Automatic mode. The service reloads service.conf every "
+                      "~30s, so saved changes take effect without a restart.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #9aa;")
+        v.addWidget(note)
+
+        self.save_btn = QPushButton("Save")
+        self.save_btn.clicked.connect(self.save)
+        v.addWidget(self.save_btn)
+
+        self.open_btn = QPushButton("Open config file…")
+        self.open_btn.clicked.connect(self.open_config)
+        v.addWidget(self.open_btn)
+
+        self.msg = QLabel("")
+        self.msg.setWordWrap(True)
+        v.addWidget(self.msg)
+        v.addStretch(1)
+
+        self.refresh()
+
+    def refresh(self):
+        cfg = load_service_config()
+        self.on_ac.setCurrentText(cfg["on_ac"])
+        self.on_battery.setCurrentText(cfg["on_battery"])
+        self.on_low.setCurrentText(cfg["on_low_battery"])
+        try:
+            self.threshold.setValue(int(cfg["low_battery"]))
+        except ValueError:
+            pass
+
+    def save(self):
+        updates = {
+            "on_ac": self.on_ac.currentText(),
+            "on_battery": self.on_battery.currentText(),
+            "on_low_battery": self.on_low.currentText(),
+            "low_battery": str(self.threshold.value()),
+        }
+        try:
+            save_service_config(updates)
+        except OSError as e:
+            self.msg.setText(f"Could not write config: {e}")
+            self.msg.setStyleSheet("color: #ff3131;")
+            return
+        self.msg.setText("Saved - the service reloads config within ~30s.")
+        self.msg.setStyleSheet("color: #3ddc6f;")
+
+    def open_config(self):
+        """Open service.conf in $VISUAL/$EDITOR (fallback xdg-open)."""
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+        try:
+            if editor:
+                subprocess.Popen([editor, CONFIG_PATH])
+            else:
+                subprocess.Popen(["xdg-open", CONFIG_PATH])
+        except OSError:
+            self.msg.setText(f"Config: {CONFIG_PATH}")
+            self.msg.setStyleSheet("color: #ff3131;")
 class SettingsWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -548,6 +689,7 @@ class SettingsWindow(QMainWindow):
         tabs.addTab(FanTab(), "Fan curve")
         tabs.addTab(BatteryTab(), "Battery")
         tabs.addTab(PowerTab(), "Power")
+        tabs.addTab(ConfigTab(), "Profiles")
         tabs.addTab(TelemetryTab(), "Telemetry")
         self.setCentralWidget(tabs)
         # Telemetry polling dies with the process; stop it on close.

@@ -12,7 +12,8 @@
 #     power-source change and return to Automatic
 #   - "Lock profile": a manual pick survives power changes (low battery still
 #     forces the safety profile, then restores your locked pick)
-#   - "Configure…": opens ~/.config/z13-power/service.conf (fully commented)
+#   - "Settings…": opens the settings window; its Profiles tab edits the
+#     service config ("Open config file…" exposes the raw file)
 #   - notifies (notify-send) on every switch and on external profile changes
 #
 # Config: ~/.config/z13-power/service.conf — every z13ctl call the service makes
@@ -70,7 +71,8 @@ CONFIG_TEMPLATE = """\
 # =============================================================================
 #  z13-power — ROG Flow Z13 power profile configuration
 #  Read by the z13-power-service tray app. Editing takes effect within ~30s
-#  (no restart needed). Opens with the tray menu -> Configure….
+#  (no restart needed). Edit on_ac / on_battery / on_low_battery / low_battery
+#  from the settings window (Profiles tab); per-mode recipes via "Open config file…".
 #
 #  Modes: performance | balanced | silent | max | lowpower
 #  Firmware profiles: quiet | balanced | performance
@@ -435,9 +437,6 @@ class Service:
         diagnose_a = QAction("Diagnose\u2026", self.menu)
         diagnose_a.triggered.connect(self.show_diagnose)
         self.menu.addAction(diagnose_a)
-        configure_a = QAction("Configure\u2026", self.menu)
-        configure_a.triggered.connect(self.open_config)
-        self.menu.addAction(configure_a)
         settings_a = QAction("Settings\u2026", self.menu)
         settings_a.triggered.connect(self.open_settings)
         self.menu.addAction(settings_a)
@@ -602,17 +601,6 @@ class Service:
         self.tray.setToolTip(f"z13-power: {label} ({state})")
         if not self.tray.isVisible():
             self.tray.show()
-
-    def open_config(self):
-        ensure_config()
-        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
-        try:
-            if editor:
-                subprocess.Popen([editor, CONFIG_PATH])
-            else:
-                subprocess.Popen(["xdg-open", CONFIG_PATH])
-        except OSError:
-            notify("z13-power", f"Config: {CONFIG_PATH}")
 
     def open_settings(self):
         try:
