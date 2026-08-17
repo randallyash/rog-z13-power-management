@@ -149,7 +149,9 @@ APIs, no PowerDevil hooks, no autoswitch. Everything runs on any desktop:
   and `notify-send` popups appear with no extra software. On non-KDE Wayland
   desktops the service registers its own StatusNotifierItem + dbusmenu, so the
   tray menu (right-click) is rendered by the bar itself instead of Qt (Qt's
-  tray backend can't pop a menu on Wayland). Two things to check:
+  tray backend can't pop a menu on Wayland). If the SNI item ever fails to
+  register, the service automatically falls back to the classic Qt tray icon
+  (and notifies you) rather than losing the icon. Two things to check:
   - the service auto-starts at login — it hooks `graphical-session.target`
     (`systemctl --user is-active graphical-session.target`; Hyprland setups
     must import it via `systemctl --user import-environment` + start the

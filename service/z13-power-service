@@ -568,6 +568,8 @@ if _DBUS_NEXT_OK:
         settings_clicked = pyqtSignal()
         quit_clicked = pyqtSignal()
         cycle_requested = pyqtSignal()
+        registered = pyqtSignal()
+        failed = pyqtSignal(str)
 
         ID_AUTO = 6
         ID_LOCK = 8
@@ -623,11 +625,16 @@ if _DBUS_NEXT_OK:
         # -- dbus thread -----------------------------------------------------
 
         def _run(self):
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            self._loop = loop
-            loop.run_until_complete(self._setup())
-            loop.run_forever()
+            # Never die silently: report any failure so the service can fall
+            # back to the classic Qt tray instead of losing the icon.
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                self._loop = loop
+                loop.run_until_complete(self._setup())
+                loop.run_forever()
+            except Exception as exc:  # pragma: no cover — transport/loop errors
+                self.failed.emit(str(exc) or exc.__class__.__name__)
 
         async def _setup(self):
             bus = await MessageBus().connect()
@@ -646,6 +653,8 @@ if _DBUS_NEXT_OK:
             else:
                 return
             self._exported = True
+            # The item is live: the service keeps the Qt fallback tray hidden.
+            self.registered.emit()
             # Register with the watcher, retrying until an SNI host (waybar,
             # etc.) is present — it may start after the service.
             for _ in range(60):
@@ -779,12 +788,53 @@ class Service:
         self._last_applied = None
         self._last_notified = None
 
-        # Tray backend. KDE Plasma renders the tray menu itself, and X11's
-        # QSystemTrayIcon backend emits activated(Context) for right-click —
-        # both keep the classic QMenu. Other Wayland desktops (Hyprland/waybar
-        # etc.) render tray menus from the SNI dbusmenu protocol, which the Qt
-        # backend never exposes, so the service registers its own SNI item.
+        # Classic Qt tray — used on KDE Plasma and X11, and as the fallback if
+        # the SNI item below fails to register (a silent failure must never
+        # cost us the tray icon).
+        self.tray = QSystemTrayIcon(make_icon(MODE_COLORS["performance"]))
+        self.menu = QMenu()
+
+        # Modes + Automatic form an exclusive radio group.
+        self.group = QActionGroup(self.menu)
+        self.group.setExclusive(True)
+        self.mode_actions = {}
+        for mode in MODE_ORDER:
+            a = QAction(MODES[mode], self.menu, checkable=True)
+            a.triggered.connect(lambda _c, m=mode: self.manual(m))
+            self.group.addAction(a)
+            self.mode_actions[mode] = a
+            self.menu.addAction(a)
+        self.auto_action = QAction("Automatic", self.menu, checkable=True)
+        self.auto_action.triggered.connect(lambda _c: self.choose_automatic())
+        self.group.addAction(self.auto_action)
+        self.menu.addAction(self.auto_action)
+
+        self.menu.addSeparator()
+        self.lock_action = QAction("Lock profile", self.menu, checkable=True)
+        self.lock_action.toggled.connect(self.on_lock_toggled)
+        self.lock_action.setEnabled(False)
+        self.menu.addAction(self.lock_action)
+
+        self.menu.addSeparator()
+        diagnose_a = QAction("Diagnose\u2026", self.menu)
+        diagnose_a.triggered.connect(self.show_diagnose)
+        self.menu.addAction(diagnose_a)
+        settings_a = QAction("Settings\u2026", self.menu)
+        settings_a.triggered.connect(self.open_settings)
+        self.menu.addAction(settings_a)
+        quit_a = QAction("Quit", self.menu)
+        quit_a.triggered.connect(self.app.quit)
+        self.menu.addAction(quit_a)
+
+        self.tray.setContextMenu(self.menu)
+        self.tray.activated.connect(self.on_activated)
+
+        # Other Wayland desktops (Hyprland/waybar etc.) render tray menus from
+        # the SNI dbusmenu protocol, which the Qt backend never exposes, so the
+        # service registers its own SNI item there; the Qt tray above stays
+        # hidden unless that fails.
         self.sni = None
+        self._sni_grace_timer = None
         if desktop_needs_sni():
             if not _DBUS_NEXT_OK:
                 notify("z13-power",
@@ -798,45 +848,8 @@ class Service:
                 self.sni.settings_clicked.connect(self.open_settings)
                 self.sni.quit_clicked.connect(self.app.quit)
                 self.sni.cycle_requested.connect(self.cycle)
-
-        if self.sni is None:
-            self.tray = QSystemTrayIcon(make_icon(MODE_COLORS["performance"]))
-            self.menu = QMenu()
-
-            # Modes + Automatic form an exclusive radio group.
-            self.group = QActionGroup(self.menu)
-            self.group.setExclusive(True)
-            self.mode_actions = {}
-            for mode in MODE_ORDER:
-                a = QAction(MODES[mode], self.menu, checkable=True)
-                a.triggered.connect(lambda _c, m=mode: self.manual(m))
-                self.group.addAction(a)
-                self.mode_actions[mode] = a
-                self.menu.addAction(a)
-            self.auto_action = QAction("Automatic", self.menu, checkable=True)
-            self.auto_action.triggered.connect(lambda _c: self.choose_automatic())
-            self.group.addAction(self.auto_action)
-            self.menu.addAction(self.auto_action)
-
-            self.menu.addSeparator()
-            self.lock_action = QAction("Lock profile", self.menu, checkable=True)
-            self.lock_action.toggled.connect(self.on_lock_toggled)
-            self.lock_action.setEnabled(False)
-            self.menu.addAction(self.lock_action)
-
-            self.menu.addSeparator()
-            diagnose_a = QAction("Diagnose\u2026", self.menu)
-            diagnose_a.triggered.connect(self.show_diagnose)
-            self.menu.addAction(diagnose_a)
-            settings_a = QAction("Settings\u2026", self.menu)
-            settings_a.triggered.connect(self.open_settings)
-            self.menu.addAction(settings_a)
-            quit_a = QAction("Quit", self.menu)
-            quit_a.triggered.connect(self.app.quit)
-            self.menu.addAction(quit_a)
-
-            self.tray.setContextMenu(self.menu)
-            self.tray.activated.connect(self.on_activated)
+                self.sni.registered.connect(self.on_sni_registered)
+                self.sni.failed.connect(self.on_sni_failed)
 
         self.monitor = PowerMonitor()
         self.monitor.event.connect(self.on_power_event)
@@ -857,9 +870,41 @@ class Service:
         apply_saved_lighting()
         if self.sni is not None:
             self.sni.show()
+            # Give the SNI item a grace period; fall back to the classic Qt
+            # tray if it never registers (a silent dbus/thread failure must
+            # not take the tray icon away).
+            self._sni_grace_timer = QTimer()
+            self._sni_grace_timer.setSingleShot(True)
+            self._sni_grace_timer.timeout.connect(self._sni_grace_expired)
+            self._sni_grace_timer.start(15000)
         else:
             self.tray.show()
         self.startup_diagnose()
+
+    def on_sni_registered(self):
+        """The SNI item is live — keep the Qt fallback tray hidden."""
+        if self.sni is None:
+            return  # already fell back; don't hide the tray that replaced it
+        if self._sni_grace_timer is not None:
+            self._sni_grace_timer.stop()
+        if self.tray.isVisible():
+            self.tray.hide()
+
+    def on_sni_failed(self, reason):
+        self._fallback_to_qt_tray(reason)
+
+    def _sni_grace_expired(self):
+        self._fallback_to_qt_tray("the tray menu backend did not register")
+
+    def _fallback_to_qt_tray(self, reason):
+        if self.sni is None:
+            return
+        if self._sni_grace_timer is not None:
+            self._sni_grace_timer.stop()
+        self.sni = None
+        self.tray.show()
+        notify("z13-power tray",
+               f"Menu backend unavailable ({reason}); using the fallback tray")
 
     def startup_diagnose(self):
         report = run_diagnose()

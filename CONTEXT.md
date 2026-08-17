@@ -70,7 +70,10 @@ click CYCLES to the next profile (Activate); right-click opens the menu.
   (plasma-integration never emits `activated(Context)`), and a parentless
   `QMenu.popup()` can't display on Wayland (no surface for the xdg_popup in a
   windowless service). Live menu state (checked mode, Lock enable/state) is
-  pushed via `ItemsPropertiesUpdated`. Needs `python-dbus-next`.
+  pushed via `ItemsPropertiesUpdated`. Needs `python-dbus-next`. The SniTray
+  dbus thread must never silently take the icon away: it emits `registered`
+  on success and `failed(reason)` on error, and the service falls back to the
+  classic Qt tray (icon + cycling, no menu) after 15s or on failure.
 
 State: `automatic` (default), `manual_mode`, `locked`.
 - **Executor**: the service runs `z13ctl` DIRECTLY per mode — it no longer
