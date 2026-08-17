@@ -43,8 +43,11 @@ try:
     from dbus_next.aio import MessageBus
     from dbus_next.service import (ServiceInterface, dbus_property, method,
                                    signal)
+    PropertyAccess.READ  # fail fast if the dbus-next enum names differ
     _DBUS_NEXT_OK = True
-except ImportError:  # pragma: no cover — packaged with python-dbus-next
+except (ImportError, AttributeError):
+    # pragma: no cover — packaged with python-dbus-next; on any dbus-next
+    # incompatibility the service keeps working with the classic Qt tray.
     _DBUS_NEXT_OK = False
 
 CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
@@ -434,42 +437,42 @@ if _DBUS_NEXT_OK:
             super().__init__("org.kde.StatusNotifierItem")
             self._owner = owner
 
-        @dbus_property(access=PropertyAccess.READONLY)
+        @dbus_property(access=PropertyAccess.READ)
         def Category(self) -> "s":
             return "ApplicationStatus"
 
-        @dbus_property(access=PropertyAccess.READONLY)
+        @dbus_property(access=PropertyAccess.READ)
         def Id(self) -> "s":
             return "z13-power-service"
 
-        @dbus_property(access=PropertyAccess.READONLY)
+        @dbus_property(access=PropertyAccess.READ)
         def Title(self) -> "s":
             return "z13-power"
 
-        @dbus_property(access=PropertyAccess.READONLY)
+        @dbus_property(access=PropertyAccess.READ)
         def Status(self) -> "s":
             return "Active"
 
-        @dbus_property(access=PropertyAccess.READONLY)
+        @dbus_property(access=PropertyAccess.READ)
         def ItemIsMenu(self) -> "b":
             return False
 
-        @dbus_property(access=PropertyAccess.READONLY)
+        @dbus_property(access=PropertyAccess.READ)
         def Menu(self) -> "s":
             # waybar reads this via get_variant<std::string>, which would
             # throw on a strictly-typed object path ('o'); export it as a
             # plain string.
             return "/MenuBar"
 
-        @dbus_property(access=PropertyAccess.READONLY)
+        @dbus_property(access=PropertyAccess.READ)
         def IconName(self) -> "s":
             return "preferences-system-power"
 
-        @dbus_property(access=PropertyAccess.READONLY)
+        @dbus_property(access=PropertyAccess.READ)
         def IconPixmap(self) -> "a(iiay)":
             return self._owner._icon_pixmaps
 
-        @dbus_property(access=PropertyAccess.READONLY)
+        @dbus_property(access=PropertyAccess.READ)
         def ToolTip(self) -> "(sa(iiay)ss)":
             return self._owner.tooltip
 
@@ -509,15 +512,15 @@ if _DBUS_NEXT_OK:
             super().__init__("com.canonical.dbusmenu")
             self._owner = owner
 
-        @dbus_property(access=PropertyAccess.READONLY)
+        @dbus_property(access=PropertyAccess.READ)
         def Version(self) -> "i":
             return 3
 
-        @dbus_property(access=PropertyAccess.READONLY)
+        @dbus_property(access=PropertyAccess.READ)
         def TextDirection(self) -> "s":
             return "ltr"
 
-        @dbus_property(access=PropertyAccess.READONLY)
+        @dbus_property(access=PropertyAccess.READ)
         def Status(self) -> "s":
             return "normal"
 
