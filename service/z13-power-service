@@ -23,17 +23,29 @@
 #
 # Requires: z13ctl, notify-send, python-pyqt6, pyudev.
 
+import asyncio
 import configparser
 import os
 import subprocess
 import sys
+import threading
 
 from PyQt6.QtCore import Qt, QPointF, QRectF, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import (QAction, QActionGroup, QColor, QCursor, QIcon,
-                         QPainter, QPen, QPolygonF, QPixmap)
+                         QImage, QPainter, QPen, QPolygonF, QPixmap)
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 import pyudev
+
+try:
+    from dbus_next import (DBusError, Message, MessageType, PropertyAccess,
+                           Variant)
+    from dbus_next.aio import MessageBus
+    from dbus_next.service import (ServiceInterface, dbus_property, method,
+                                   signal)
+    _DBUS_NEXT_OK = True
+except ImportError:  # pragma: no cover — packaged with python-dbus-next
+    _DBUS_NEXT_OK = False
 
 CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
@@ -352,8 +364,8 @@ def ensure_config():
         f.write(CONFIG_TEMPLATE)
 
 
-def make_icon(color):
-    """ROG-style tray icon: dark tile + angular power bolt, tinted per mode."""
+def make_pixmap(color):
+    """ROG-style tray tile: dark tile + angular power bolt, tinted per mode."""
     pm = QPixmap(64, 64)
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
@@ -369,7 +381,27 @@ def make_icon(color):
     ])
     p.drawPolygon(bolt)
     p.end()
-    return QIcon(pm)
+    return pm
+
+
+def make_icon(color):
+    """QIcon wrapper around make_pixmap for the Qt system-tray backend."""
+    return QIcon(make_pixmap(color))
+
+
+def desktop_needs_sni():
+    """Tray backend decision: non-KDE Wayland desktops get the own SNI item.
+
+    KDE Plasma renders the tray menu itself; X11's QSystemTrayIcon backend
+    emits activated(Context) for right-click. On other Wayland desktops
+    (Hyprland/waybar) neither applies — the SNI host calls ContextMenu() and
+    the platform theme handles it without the app ever seeing an event — so
+    the service registers its own StatusNotifierItem + dbusmenu and lets the
+    host render the menu.
+    """
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        return False
+    return "kde" not in os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
 
 class PowerMonitor(QThread):
@@ -393,6 +425,344 @@ class PowerMonitor(QThread):
                 self.event.emit()
 
 
+if _DBUS_NEXT_OK:
+
+    class _ItemInterface(ServiceInterface):
+        """org.kde.StatusNotifierItem served by SniTray."""
+
+        def __init__(self, owner):
+            super().__init__("org.kde.StatusNotifierItem")
+            self._owner = owner
+
+        @dbus_property(access=PropertyAccess.READONLY)
+        def Category(self) -> "s":
+            return "ApplicationStatus"
+
+        @dbus_property(access=PropertyAccess.READONLY)
+        def Id(self) -> "s":
+            return "z13-power-service"
+
+        @dbus_property(access=PropertyAccess.READONLY)
+        def Title(self) -> "s":
+            return "z13-power"
+
+        @dbus_property(access=PropertyAccess.READONLY)
+        def Status(self) -> "s":
+            return "Active"
+
+        @dbus_property(access=PropertyAccess.READONLY)
+        def ItemIsMenu(self) -> "b":
+            return False
+
+        @dbus_property(access=PropertyAccess.READONLY)
+        def Menu(self) -> "s":
+            # waybar reads this via get_variant<std::string>, which would
+            # throw on a strictly-typed object path ('o'); export it as a
+            # plain string.
+            return "/MenuBar"
+
+        @dbus_property(access=PropertyAccess.READONLY)
+        def IconName(self) -> "s":
+            return "preferences-system-power"
+
+        @dbus_property(access=PropertyAccess.READONLY)
+        def IconPixmap(self) -> "a(iiay)":
+            return self._owner._icon_pixmaps
+
+        @dbus_property(access=PropertyAccess.READONLY)
+        def ToolTip(self) -> "(sa(iiay)ss)":
+            return self._owner.tooltip
+
+        @method()
+        def Activate(self, x: "i", y: "i"):
+            self._owner.cycle_requested.emit()
+
+        @method()
+        def SecondaryActivate(self, x: "i", y: "i"):
+            self._owner.cycle_requested.emit()
+
+        @method()
+        def ContextMenu(self, x: "i", y: "i"):
+            pass  # the host renders the dbusmenu itself
+
+        @method()
+        def Scroll(self, delta: "i", orientation: "s"):
+            pass
+
+        @method()
+        def ProvideXdgActivationToken(self, token: "s"):
+            pass
+
+        @signal()
+        def NewIcon(self):
+            pass
+
+        @signal()
+        def NewToolTip(self):
+            pass
+
+
+    class _MenuInterface(ServiceInterface):
+        """com.canonical.dbusmenu served by SniTray (waybar renders this)."""
+
+        def __init__(self, owner):
+            super().__init__("com.canonical.dbusmenu")
+            self._owner = owner
+
+        @dbus_property(access=PropertyAccess.READONLY)
+        def Version(self) -> "i":
+            return 3
+
+        @dbus_property(access=PropertyAccess.READONLY)
+        def TextDirection(self) -> "s":
+            return "ltr"
+
+        @dbus_property(access=PropertyAccess.READONLY)
+        def Status(self) -> "s":
+            return "normal"
+
+        @method()
+        def GetLayout(self, parent_id: "i", recursion_depth: "i",
+                      property_names: "as") -> "u(ia{sv}av)":
+            return [3, self._owner._layout()]
+
+        @method()
+        def GetGroupProperties(self, ids: "ai") -> "a(ia{sv})":
+            return [[i, self._owner._props_for(i)] for i in ids]
+
+        @method()
+        def GetProperty(self, iid: "i", name: "s") -> "v":
+            props = self._owner._props_for(iid)
+            if name in props:
+                return props[name]
+            raise DBusError("org.freedesktop.DBus.Error.UnknownProperty",
+                            f"no such property: {name}")
+
+        @method()
+        def Event(self, iid: "i", event_id: "s", data: "v", timestamp: "u"):
+            self._owner._on_menu_event(iid)
+
+        @signal()
+        def ItemsPropertiesUpdated(self, changed: "a(ia{sv})",
+                                   removed: "ap") -> "a(ia{sv})ap":
+            return [changed, removed]
+
+
+    class SniTray(QObject):
+        """Own StatusNotifierItem + dbusmenu tray for non-KDE Wayland.
+
+        On Hyprland/waybar the QSystemTrayIcon backend can't show a menu:
+        right-click arrives as an SNI ContextMenu() call that the platform
+        theme (plasma-integration/KStatusNotifierItem) handles internally, so
+        the app never gets `activated(Context)`. And a manual QMenu.popup()
+        can't display on Wayland either, because a windowless service has no
+        parent surface for the xdg_popup. So the service registers its own
+        item and lets the host render the menu from the exported
+        com.canonical.dbusmenu — the same mechanism GTK appindicator apps use.
+        """
+
+        mode_clicked = pyqtSignal(str)
+        automatic_clicked = pyqtSignal()
+        lock_toggled = pyqtSignal(bool)
+        diagnose_clicked = pyqtSignal()
+        settings_clicked = pyqtSignal()
+        quit_clicked = pyqtSignal()
+        cycle_requested = pyqtSignal()
+
+        ID_AUTO = 6
+        ID_LOCK = 8
+        ID_DIAGNOSE = 10
+        ID_SETTINGS = 11
+        ID_QUIT = 12
+        MODE_IDS = {i + 1: MODE_ORDER[i] for i in range(len(MODE_ORDER))}
+
+        def __init__(self):
+            super().__init__()
+            self._thread = None
+            self._loop = None
+            self._item = None
+            self._menu = None
+            self._service_name = None
+            self._exported = False
+            self._icon_pixmaps = []
+            self._tooltip = ""
+            self._automatic = True
+            self._manual_mode = None
+            self._locked = False
+
+        # -- called from the Qt thread -------------------------------------
+
+        def show(self):
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._run, name="z13-sni", daemon=True)
+                self._thread.start()
+
+        def set_icon(self, pixmap):
+            self._icon_pixmaps = _argb_pixmaps(pixmap)
+            if self._exported:
+                self._schedule(self._emit_item_update("NewIcon"))
+
+        def set_tooltip(self, text):
+            self._tooltip = text
+            if self._exported:
+                self._schedule(self._emit_item_update("NewToolTip"))
+
+        def set_state(self, automatic, manual_mode, locked):
+            if (automatic, manual_mode, locked) == \
+                    (self._automatic, self._manual_mode, self._locked):
+                return
+            self._automatic = automatic
+            self._manual_mode = manual_mode
+            self._locked = locked
+            changed = [[i, self._props_for(i)]
+                       for i in list(self.MODE_IDS) + [self.ID_AUTO, self.ID_LOCK]]
+            if self._exported:
+                self._schedule(self._emit_menu_update(changed))
+
+        # -- dbus thread -----------------------------------------------------
+
+        def _run(self):
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self._loop = loop
+            loop.run_until_complete(self._setup())
+            loop.run_forever()
+
+        async def _setup(self):
+            bus = await MessageBus().connect()
+            self._item = _ItemInterface(self)
+            self._menu = _MenuInterface(self)
+            bus.export("/StatusNotifierItem", self._item)
+            bus.export("/MenuBar", self._menu)
+            for attempt in range(10):
+                name = f"org.kde.StatusNotifierItem-{os.getpid()}-{attempt + 1}"
+                try:
+                    await bus.request_name(name)
+                    self._service_name = name
+                    break
+                except Exception:
+                    continue
+            else:
+                return
+            self._exported = True
+            # Register with the watcher, retrying until an SNI host (waybar,
+            # etc.) is present — it may start after the service.
+            for _ in range(60):
+                try:
+                    reply = await bus.call(Message(
+                        destination="org.kde.StatusNotifierWatcher",
+                        path="/StatusNotifierWatcher",
+                        interface="org.kde.StatusNotifierWatcher",
+                        member="RegisterStatusNotifierItem",
+                        signature="s",
+                        body=[self._service_name]))
+                    if reply.message_type != MessageType.ERROR:
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(1)
+            # Make sure the host re-reads the current icon/tooltip.
+            await self._emit_item_update("NewIcon")
+            await self._emit_item_update("NewToolTip")
+
+        def _schedule(self, coro):
+            loop = self._loop
+            if loop is not None:
+                asyncio.run_coroutine_threadsafe(coro, loop)
+
+        async def _emit_item_update(self, which):
+            if not self._exported:
+                return
+            if which == "NewIcon":
+                self._item.NewIcon()
+            else:
+                self._item.NewToolTip()
+
+        async def _emit_menu_update(self, changed):
+            if self._exported:
+                self._menu.ItemsPropertiesUpdated(changed, [])
+
+        # -- menu model -------------------------------------------------------
+
+        def _props_for(self, iid):
+            if iid in self.MODE_IDS:
+                mode = self.MODE_IDS[iid]
+                checked = not self._automatic and self._manual_mode == mode
+                return {"label": Variant("s", MODES[mode]),
+                        "toggle-type": Variant("s", "radio"),
+                        "toggle-state": Variant("i", 1 if checked else 0),
+                        "enabled": Variant("b", True)}
+            if iid == self.ID_AUTO:
+                return {"label": Variant("s", "Automatic"),
+                        "toggle-type": Variant("s", "radio"),
+                        "toggle-state": Variant("i", 1 if self._automatic else 0),
+                        "enabled": Variant("b", True)}
+            if iid == self.ID_LOCK:
+                return {"label": Variant("s", "Lock profile"),
+                        "toggle-type": Variant("s", "checkmark"),
+                        "toggle-state": Variant("i", 1 if self._locked else 0),
+                        "enabled": Variant("b", self._manual_mode is not None)}
+            if iid == self.ID_DIAGNOSE:
+                return {"label": Variant("s", "Diagnose\u2026"),
+                        "enabled": Variant("b", True)}
+            if iid == self.ID_SETTINGS:
+                return {"label": Variant("s", "Settings\u2026"),
+                        "enabled": Variant("b", True)}
+            if iid == self.ID_QUIT:
+                return {"label": Variant("s", "Quit"),
+                        "enabled": Variant("b", True)}
+            return {}
+
+        def _layout(self):
+            children = []
+            for iid in range(1, 13):
+                props = {"type": Variant("s", "separator")} if iid in (7, 9) \
+                    else self._props_for(iid)
+                children.append([iid, props, []])
+            wrapped = []
+            for child in children:
+                wrapped.append(Variant("(ia{sv}av)", child))
+            return [0, {"label": Variant("s", "z13-power")}, wrapped]
+
+        def _on_menu_event(self, iid):
+            if iid in self.MODE_IDS:
+                self.mode_clicked.emit(self.MODE_IDS[iid])
+            elif iid == self.ID_AUTO:
+                self.automatic_clicked.emit()
+            elif iid == self.ID_LOCK:
+                self.lock_toggled.emit(not self._locked)
+            elif iid == self.ID_DIAGNOSE:
+                self.diagnose_clicked.emit()
+            elif iid == self.ID_SETTINGS:
+                self.settings_clicked.emit()
+            elif iid == self.ID_QUIT:
+                self.quit_clicked.emit()
+
+        @property
+        def tooltip(self):
+            return ("", [], self._tooltip, "")
+
+
+    def _argb_pixmaps(pixmap):
+        """IconPixmap payload in SNI byte order (raw ARGB, A-R-G-B per pixel).
+
+        waybar validates that the blob is exactly w*h*4 bytes and treats it as
+        ARGB; Qt's Format_ARGB32 stores little-endian bytes as B,G,R,A, so the
+        bytes are reordered.
+        """
+        img = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        data = img.constBits().asstring(img.sizeInBytes())
+        out = bytearray(len(data))
+        for i in range(img.width() * img.height()):
+            j = i * 4
+            out[j] = data[j + 3]      # A
+            out[j + 1] = data[j + 2]  # R
+            out[j + 2] = data[j + 1]  # G
+            out[j + 3] = data[j]      # B
+        return [(img.width(), img.height(), bytes(out))]
+
+
 class Service:
     def __init__(self, app):
         self.app = app
@@ -409,43 +779,64 @@ class Service:
         self._last_applied = None
         self._last_notified = None
 
-        self.tray = QSystemTrayIcon(make_icon(MODE_COLORS["performance"]))
-        self.menu = QMenu()
+        # Tray backend. KDE Plasma renders the tray menu itself, and X11's
+        # QSystemTrayIcon backend emits activated(Context) for right-click —
+        # both keep the classic QMenu. Other Wayland desktops (Hyprland/waybar
+        # etc.) render tray menus from the SNI dbusmenu protocol, which the Qt
+        # backend never exposes, so the service registers its own SNI item.
+        self.sni = None
+        if desktop_needs_sni():
+            if not _DBUS_NEXT_OK:
+                notify("z13-power",
+                       "python-dbus-next missing — tray menu unavailable")
+            else:
+                self.sni = SniTray()
+                self.sni.mode_clicked.connect(self.manual)
+                self.sni.automatic_clicked.connect(self.choose_automatic)
+                self.sni.lock_toggled.connect(self.on_lock_toggled)
+                self.sni.diagnose_clicked.connect(self.show_diagnose)
+                self.sni.settings_clicked.connect(self.open_settings)
+                self.sni.quit_clicked.connect(self.app.quit)
+                self.sni.cycle_requested.connect(self.cycle)
 
-        # Modes + Automatic form an exclusive radio group.
-        self.group = QActionGroup(self.menu)
-        self.group.setExclusive(True)
-        self.mode_actions = {}
-        for mode in MODE_ORDER:
-            a = QAction(MODES[mode], self.menu, checkable=True)
-            a.triggered.connect(lambda _c, m=mode: self.manual(m))
-            self.group.addAction(a)
-            self.mode_actions[mode] = a
-            self.menu.addAction(a)
-        self.auto_action = QAction("Automatic", self.menu, checkable=True)
-        self.auto_action.triggered.connect(lambda _c: self.choose_automatic())
-        self.group.addAction(self.auto_action)
-        self.menu.addAction(self.auto_action)
+        if self.sni is None:
+            self.tray = QSystemTrayIcon(make_icon(MODE_COLORS["performance"]))
+            self.menu = QMenu()
 
-        self.menu.addSeparator()
-        self.lock_action = QAction("Lock profile", self.menu, checkable=True)
-        self.lock_action.toggled.connect(self.on_lock_toggled)
-        self.lock_action.setEnabled(False)
-        self.menu.addAction(self.lock_action)
+            # Modes + Automatic form an exclusive radio group.
+            self.group = QActionGroup(self.menu)
+            self.group.setExclusive(True)
+            self.mode_actions = {}
+            for mode in MODE_ORDER:
+                a = QAction(MODES[mode], self.menu, checkable=True)
+                a.triggered.connect(lambda _c, m=mode: self.manual(m))
+                self.group.addAction(a)
+                self.mode_actions[mode] = a
+                self.menu.addAction(a)
+            self.auto_action = QAction("Automatic", self.menu, checkable=True)
+            self.auto_action.triggered.connect(lambda _c: self.choose_automatic())
+            self.group.addAction(self.auto_action)
+            self.menu.addAction(self.auto_action)
 
-        self.menu.addSeparator()
-        diagnose_a = QAction("Diagnose\u2026", self.menu)
-        diagnose_a.triggered.connect(self.show_diagnose)
-        self.menu.addAction(diagnose_a)
-        settings_a = QAction("Settings\u2026", self.menu)
-        settings_a.triggered.connect(self.open_settings)
-        self.menu.addAction(settings_a)
-        quit_a = QAction("Quit", self.menu)
-        quit_a.triggered.connect(self.app.quit)
-        self.menu.addAction(quit_a)
+            self.menu.addSeparator()
+            self.lock_action = QAction("Lock profile", self.menu, checkable=True)
+            self.lock_action.toggled.connect(self.on_lock_toggled)
+            self.lock_action.setEnabled(False)
+            self.menu.addAction(self.lock_action)
 
-        self.tray.setContextMenu(self.menu)
-        self.tray.activated.connect(self.on_activated)
+            self.menu.addSeparator()
+            diagnose_a = QAction("Diagnose\u2026", self.menu)
+            diagnose_a.triggered.connect(self.show_diagnose)
+            self.menu.addAction(diagnose_a)
+            settings_a = QAction("Settings\u2026", self.menu)
+            settings_a.triggered.connect(self.open_settings)
+            self.menu.addAction(settings_a)
+            quit_a = QAction("Quit", self.menu)
+            quit_a.triggered.connect(self.app.quit)
+            self.menu.addAction(quit_a)
+
+            self.tray.setContextMenu(self.menu)
+            self.tray.activated.connect(self.on_activated)
 
         self.monitor = PowerMonitor()
         self.monitor.event.connect(self.on_power_event)
@@ -464,7 +855,10 @@ class Service:
     def start(self):
         self.evaluate_power()
         apply_saved_lighting()
-        self.tray.show()
+        if self.sni is not None:
+            self.sni.show()
+        else:
+            self.tray.show()
         self.startup_diagnose()
 
     def startup_diagnose(self):
@@ -475,17 +869,15 @@ class Service:
                    " · ".join(fails) or "run 'z13-power diagnose' for details")
 
     def on_activated(self, reason):
-        # Right-click: Plasma renders the context menu natively; other SNI
-        # trays (waybar/Hyprland, etc.) need us to pop it ourselves, since
-        # Qt's default popup is positioned via QCursor.pos() and that is
-        # unreliable (often 0,0) on Wayland. Left/middle click: cycle to the
-        # next profile (menu popups on Wayland are position-unreliable, so
-        # cycling gives visible feedback instead).
+        # Qt QSystemTrayIcon path (KDE, or any X11 desktop). On KDE the shell
+        # renders the context menu natively; on X11, Qt's own backend emits
+        # activated(Context) for right-click (it does NOT on the SNI backend —
+        # non-KDE Wayland uses SniTray instead). Left/middle click cycles.
         if reason in (QSystemTrayIcon.ActivationReason.Trigger,
                       QSystemTrayIcon.ActivationReason.MiddleClick):
             self.cycle()
         elif reason == QSystemTrayIcon.ActivationReason.Context:
-            if os.environ.get("XDG_CURRENT_DESKTOP", "").strip().lower() != "plasma":
+            if "kde" not in os.environ.get("XDG_CURRENT_DESKTOP", "").lower():
                 self.show_menu()
 
     def show_menu(self):
@@ -506,7 +898,10 @@ class Service:
         """User picked a mode from the tray menu."""
         self.automatic = False
         self.manual_mode = mode
-        self.lock_action.setEnabled(True)
+        if self.sni is not None:
+            self.sni.set_state(self.automatic, self.manual_mode, self.locked)
+        else:
+            self.lock_action.setEnabled(True)
         if self.apply(mode, force=True):
             self.update_tray()
 
@@ -520,10 +915,11 @@ class Service:
         self.automatic = True
         self.manual_mode = None
         self.locked = False
-        self.lock_action.blockSignals(True)
-        self.lock_action.setChecked(False)
-        self.lock_action.setEnabled(False)
-        self.lock_action.blockSignals(False)
+        if self.sni is None:
+            self.lock_action.blockSignals(True)
+            self.lock_action.setChecked(False)
+            self.lock_action.setEnabled(False)
+            self.lock_action.blockSignals(False)
         self.update_menu_checks()
         self.update_tray()
         if announce and changed:
@@ -531,6 +927,8 @@ class Service:
 
     def on_lock_toggled(self, checked):
         self.locked = checked
+        if self.sni is not None:
+            self.sni.set_state(self.automatic, self.manual_mode, self.locked)
         self.update_tray()
 
     def on_power_event(self):
@@ -594,6 +992,9 @@ class Service:
         return f"{src} \u00b7 {MODES[mode]}"
 
     def update_menu_checks(self):
+        if self.sni is not None:
+            self.sni.set_state(self.automatic, self.manual_mode, self.locked)
+            return
         if self.automatic:
             self.auto_action.setChecked(True)
         elif self.manual_mode in self.mode_actions:
@@ -609,9 +1010,13 @@ class Service:
     def update_tray(self):
         mode = self.manual_mode if not self.automatic else (self._last_applied or "performance")
         color = MODE_COLORS.get(mode, "#b9b9c4")
-        self.tray.setIcon(make_icon(color))
         state = "automatic" if self.automatic else ("locked" if self.locked else "manual")
         label = MODES.get(mode, mode)
+        if self.sni is not None:
+            self.sni.set_icon(make_pixmap(color))
+            self.sni.set_tooltip(f"z13-power: {label} ({state})")
+            return
+        self.tray.setIcon(make_icon(color))
         self.tray.setToolTip(f"z13-power: {label} ({state})")
         if not self.tray.isVisible():
             self.tray.show()
@@ -638,7 +1043,10 @@ class Service:
             self.last_profile = profile
             if not self.locked:
                 self.automatic = False
-                self.lock_action.setEnabled(True)
+                if self.sni is not None:
+                    self.sni.set_state(self.automatic, self.manual_mode, self.locked)
+                else:
+                    self.lock_action.setEnabled(True)
             self.update_menu_checks()
             self.update_tray()
             notify("Power profile changed", f"Now: {profile} (set externally)")

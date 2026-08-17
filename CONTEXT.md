@@ -56,15 +56,21 @@ writes it; the service re-applies it at startup. Kept separate from the
 heavily-commented service.conf so a ConfigParser rewrite can't clobber docs.
 ## Service behavior
 
-Menu = 5 modes + **Automatic** (exclusive QActionGroup) + **Lock profile**
+Menu = 5 modes + **Automatic** (exclusive radio group) + **Lock profile**
 (checkbox, enabled only on a manual pick) + **Diagnose…** + **Settings…**
 (launches `z13-power-settings`) + **Quit**. Left/middle
-click CYCLES to the next profile (Trigger); right-click opens the menu.
-On Plasma the shell renders the context menu natively; on other SNI trays
-(waybar/Hyprland, etc.) the service pops it itself, with a screen-center
-fallback because Qt's QCursor.pos()-based popup is unreliable on Wayland.
-(Left-click cycles rather than opening the menu because menu popups on Wayland
-are position-unreliable — cycling gives visible feedback instead.)
+click CYCLES to the next profile (Activate); right-click opens the menu.
+- **KDE Plasma / X11**: classic Qt `QSystemTrayIcon` + `QMenu`. KDE's shell
+  renders the menu natively; on X11, Qt's backend emits `activated(Context)`
+  and the service pops the menu itself.
+- **Other Wayland desktops (Hyprland/waybar)**: the service registers its OWN
+  StatusNotifierItem + `com.canonical.dbusmenu` (`SniTray`), and the host
+  renders the menu — the appindicator mechanism. QSystemTrayIcon can't do this:
+  the SNI `ContextMenu()` call is swallowed by the platform theme
+  (plasma-integration never emits `activated(Context)`), and a parentless
+  `QMenu.popup()` can't display on Wayland (no surface for the xdg_popup in a
+  windowless service). Live menu state (checked mode, Lock enable/state) is
+  pushed via `ItemsPropertiesUpdated`. Needs `python-dbus-next`.
 
 State: `automatic` (default), `manual_mode`, `locked`.
 - **Executor**: the service runs `z13ctl` DIRECTLY per mode — it no longer

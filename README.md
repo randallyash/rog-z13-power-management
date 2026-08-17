@@ -68,6 +68,8 @@ only supports AC/battery.
 - Arch Linux / CachyOS (KDE Plasma 6, Hyprland, etc.)
 - AUR: [`z13ctl-bin`](https://github.com/dahui/z13ctl) (required)
 - `python-pyqt6`, `python-pyudev`, `libnotify` (required — tray service + notifications)
+- `python-dbus-next` (required — non-KDE Wayland desktops serve the tray menu
+  via an SNI/dbusmenu item; KDE/X11 don't use it)
 - KDE Plasma is not required — the tray service is plain Qt and works on any
   desktop. See [Desktop environments](#desktop-environments) below.
 - `ryzen_smu` kernel module (optional — needed only for undervolt; without it
@@ -144,7 +146,10 @@ APIs, no PowerDevil hooks, no autoswitch. Everything runs on any desktop:
   [Caveats](#caveats).
 - **Hyprland / Omarchy** — works out of the box too; Omarchy's bar already
   provides an SNI system tray and a notification daemon, so both the tray icon
-  and `notify-send` popups appear with no extra software. Two things to check:
+  and `notify-send` popups appear with no extra software. On non-KDE Wayland
+  desktops the service registers its own StatusNotifierItem + dbusmenu, so the
+  tray menu (right-click) is rendered by the bar itself instead of Qt (Qt's
+  tray backend can't pop a menu on Wayland). Two things to check:
   - the service auto-starts at login — it hooks `graphical-session.target`
     (`systemctl --user is-active graphical-session.target`; Hyprland setups
     must import it via `systemctl --user import-environment` + start the
