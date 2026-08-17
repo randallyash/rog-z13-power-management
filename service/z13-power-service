@@ -30,7 +30,8 @@ import subprocess
 import sys
 import threading
 
-from PyQt6.QtCore import Qt, QPointF, QRectF, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import (QObject, Qt, QPointF, QRectF, QThread, QTimer,
+                          pyqtSignal)
 from PyQt6.QtGui import (QAction, QActionGroup, QColor, QCursor, QIcon,
                          QImage, QPainter, QPen, QPolygonF, QPixmap)
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
@@ -547,7 +548,7 @@ if _DBUS_NEXT_OK:
 
         @signal()
         def ItemsPropertiesUpdated(self, changed: "a(ia{sv})",
-                                   removed: "ap") -> "a(ia{sv})ap":
+                                   removed: "ao") -> "a(ia{sv})ao":
             return [changed, removed]
 
 
@@ -753,7 +754,7 @@ if _DBUS_NEXT_OK:
 
         @property
         def tooltip(self):
-            return ("", [], self._tooltip, "")
+            return ["", [], self._tooltip, ""]
 
 
     def _argb_pixmaps(pixmap):
@@ -772,7 +773,7 @@ if _DBUS_NEXT_OK:
             out[j + 1] = data[j + 2]  # R
             out[j + 2] = data[j + 1]  # G
             out[j + 3] = data[j]      # B
-        return [(img.width(), img.height(), bytes(out))]
+        return [[img.width(), img.height(), bytes(out)]]
 
 
 class Service:
