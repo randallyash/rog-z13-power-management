@@ -459,10 +459,10 @@ if _DBUS_NEXT_OK:
             return False
 
         @dbus_property(access=PropertyAccess.READ)
-        def Menu(self) -> "s":
-            # waybar reads this via get_variant<std::string>, which would
-            # throw on a strictly-typed object path ('o'); export it as a
-            # plain string.
+        def Menu(self) -> "o":
+            # The SNI Menu property is an object path; hosts like quickshell
+            # read it as a QDBusObjectPath and a plain string ('s') fails to
+            # demarshal, leaving the item without a menu.
             return "/MenuBar"
 
         @dbus_property(access=PropertyAccess.READ)
