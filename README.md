@@ -7,8 +7,9 @@ Undervolt and TDP power limits ride along automatically.
 Built on [z13ctl](https://github.com/dahui/z13ctl). A single **system tray
 service** (`z13-power-service`) owns all profile switching: it applies the right
 profile at login, on power-source changes, and on low battery, gives you a tray
-menu to switch profiles manually, and pops a KDE notification on every switch.
-A **settings window** (`z13-power-settings`) covers the rest of what the z13gui
+menu to switch profiles manually, and pops a desktop notification on every
+switch. A **settings window** (`z13-power-settings`) covers the rest of what
+the z13gui
 overlay drawer used to do — RGB lighting, fan curves, battery charge limit,
 panel overdrive, boot sound, live telemetry.
 No KDE "Run Script" hooks, no PowerDevil configuration, no autoswitch config —
@@ -64,9 +65,11 @@ only supports AC/battery.
 ## Requirements
 
 - **2025 ASUS ROG Flow Z13 (GZ302)** — these are laptop-specific values
-- Arch Linux / CachyOS with KDE Plasma 6
+- Arch Linux / CachyOS (KDE Plasma 6, Hyprland, etc.)
 - AUR: [`z13ctl-bin`](https://github.com/dahui/z13ctl) (required)
 - `python-pyqt6`, `python-pyudev`, `libnotify` (required — tray service + notifications)
+- KDE Plasma is not required — the tray service is plain Qt and works on any
+  desktop. See [Desktop environments](#desktop-environments) below.
 - `ryzen_smu` kernel module (optional — needed only for undervolt; without it
   `z13-power` warns and skips the undervolt step)
 - AUR conflicts: if you already run a `z13ctl` variant (e.g. `z13ctl-plus-bin`),
@@ -130,6 +133,27 @@ that's usually: `sudo z13ctl setup`, then re-login for the `users` group).
 
 A tray icon should appear — click it to switch profiles manually.
 
+## Desktop environments
+
+The service, settings window, and CLI are plain Qt/Python + z13ctl — no KDE
+APIs, no PowerDevil hooks, no autoswitch. Everything runs on any desktop:
+
+- **KDE Plasma** — works out of the box. The installer also deploys a
+  display/DPMS-only `powerdevilrc` (optional; `z13-power-config` does the same
+  for packaged installs). Don't set KDE's own per-state power profiles — see
+  [Caveats](#caveats).
+- **Hyprland / Omarchy** — works out of the box too; Omarchy's bar already
+  provides an SNI system tray and a notification daemon, so both the tray icon
+  and `notify-send` popups appear with no extra software. Two things to check:
+  - the service auto-starts at login — it hooks `graphical-session.target`
+    (`systemctl --user is-active graphical-session.target`; Hyprland setups
+    must import it via `systemctl --user import-environment` + start the
+    target, which Omarchy does);
+  - `z13-power-config` is a no-op outside KDE (display/DPMS is hypridle's
+    job there).
+  Other Wayland compositors need an SNI-capable tray (waybar, anyrun, …) and a
+  notification daemon (swaync, mako, dunst, …) for the same features.
+
 ## Configuration
 
 `~/.config/z13-power/service.conf` (created on first run with full inline
@@ -164,9 +188,12 @@ automatically every ~30s — no service restart needed.
 - **Don't use z13ctl's built-in autoswitch.** `z13ctl autoswitch` and the tray
   service would both fire on power changes and race each other. Leave autoswitch
   off: `z13ctl autoswitch --clear`
-- **Don't set KDE's own per-state power profiles** (System Settings → Power
-  Management → "Performance"). KDE would write `platform_profile` directly and
-  fight the service.
+- **Don't set per-state power profiles in your desktop's own power manager.**
+  On KDE that's System Settings → Power Management → "Performance"; on
+  Omarchy/Hyprland it's the bar's Power panel (which switches profiles and
+  remembers separate AC/battery choices). Any of these would write
+  `platform_profile` directly and fight the service. Keep the service as the
+  single profile switcher.
 - The `max` / `lowpower` modes are manual (tray menu or terminal) — they are not
   wired into any power state.
 - Requires the z13ctl **daemon** running for TDP/fancurve/undervolt persistence.
@@ -183,9 +210,9 @@ automatically every ~30s — no service restart needed.
 │   ├── z13-power-settings  # settings window: RGB, fan curve, battery, power
 │   └── z13-power-service.service   # systemd user unit
 ├── contrib/
-│   └── z13-power-config    # packaged helper: deploys KDE display settings
+│   └── z13-power-config    # packaged helper: deploys KDE Plasma display settings
 ├── kde/
-│   └── powerdevilrc        # display/DPMS-only PowerDevil template
+│   └── powerdevilrc        # display/DPMS-only PowerDevil template (KDE only)
 ├── LICENSE                 # GPL-3.0-or-later
 └── CONTEXT.md              # agent knowledge (local, not for the Forgejo page)
 ```

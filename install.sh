@@ -4,15 +4,18 @@
 #
 # Installs the z13-power profile manager, the z13-power-service tray/watcher
 # (which owns all power profile switching) and the z13-power-settings window
-# (lighting, fan curve, battery, power), enables the z13ctl daemon stack, and
-# deploys the KDE PowerDevil display settings.
+# (lighting, fan curve, battery, power), and enables the z13ctl daemon stack.
+# On KDE Plasma it also deploys the PowerDevil display settings; other
+# desktops (Hyprland, etc.) manage display/DPMS themselves and are skipped.
 #
 # Requirements:
 #   - 2025 ASUS ROG Flow Z13 (GZ302)
-#   - Arch Linux / CachyOS with KDE Plasma 6
+#   - Arch Linux / CachyOS (KDE Plasma 6, Hyprland, etc.)
 #   - AUR packages: z13ctl-bin (required)
 #   - ryzen_smu kernel module for undervolt support (optional)
 #   - The rog-z13-trackpad-fix project for the touchpad DWT fix (optional)
+#   - Non-KDE Wayland: a system tray host (SNI) + notification daemon for the
+#     tray icon and popups (Omarchy/Hyprland setups usually have both)
 #
 # Usage:  ./install.sh
 # Some steps prompt for sudo (z13ctl setup writes udev rules + system unit).
@@ -89,25 +92,34 @@ systemctl --user enable --now z13ctl.socket z13ctl.service 2>/dev/null || \
 
 # ── 4. Touchpad DWT fix (optional, from rog-z13-trackpad-fix) ────────────────
 if [[ ! -f /etc/udev/rules.d/99-rog-z13-touchpad.rules ]]; then
-  WARN "Touchpad DWT fix not installed. To enable 'Disable While Typing' in KDE,"
-  WARN "  install the companion project: git clone ssh://git@forgejo.fifthdread.com:223/Fifthdread/rog-z13-trackpad-fix.git"
+  WARN "Touchpad DWT fix not installed. To enable 'Disable While Typing' on your"
+  WARN "  desktop, install the companion project: git clone ssh://git@forgejo.fifthdread.com:223/Fifthdread/rog-z13-trackpad-fix.git"
   WARN "  then: sudo ./fix-rog-z13-trackpad.sh"
 else
   OK "Touchpad DWT fix already present"
 fi
 
-# ── 5. Deploy KDE PowerDevil display settings ─────────────────────────────────
-if [[ -d "$HOME/.config" ]]; then
-  TARGET="$HOME/.config/powerdevilrc"
-  if [[ -f "$TARGET" ]]; then
-    cp "$TARGET" "$TARGET.bak.$(date +%Y%m%d%H%M%S)"
-    OK "Backed up existing $TARGET"
-  fi
-  cp "$SCRIPT_DIR/kde/powerdevilrc" "$TARGET"
-  OK "Deployed KDE PowerDevil display settings to $TARGET"
-else
-  ERR "No ~/.config directory — this needs to run as your normal desktop user."
-fi
+# ── 5. Deploy PowerDevil display settings (KDE Plasma only) ───────────────────
+DE="${XDG_CURRENT_DESKTOP:-} ${XDG_SESSION_DESKTOP:-}"
+case "$DE" in
+  *[Kk][Dd][Ee]*|*[Pp]lasma*)
+    if [[ -d "$HOME/.config" ]]; then
+      TARGET="$HOME/.config/powerdevilrc"
+      if [[ -f "$TARGET" ]]; then
+        cp "$TARGET" "$TARGET.bak.$(date +%Y%m%d%H%M%S)"
+        OK "Backed up existing $TARGET"
+      fi
+      cp "$SCRIPT_DIR/kde/powerdevilrc" "$TARGET"
+      OK "Deployed KDE PowerDevil display settings to $TARGET"
+    else
+      ERR "No ~/.config directory — this needs to run as your normal desktop user."
+    fi
+    ;;
+  *)
+    INFO "Not KDE Plasma ($DE) — skipping PowerDevil display settings."
+    INFO "  Display/DPMS is handled by your desktop (e.g. hypridle on Hyprland)."
+    ;;
+esac
 
 # ── 6. Manual step reminders ──────────────────────────────────────────────────
 cat <<'EOF'
@@ -119,8 +131,12 @@ Remaining manual steps:
   2. The tray icon should be in the system tray — click it to switch profiles.
      Profile switching (AC -> performance, battery -> balanced, low -> silent)
      is handled automatically by z13-power-service.
-  3. (Optional) The Meta+B panel button runs: ~/.local/bin/z13-power settings
-     to open the settings window (lighting, fan curve, battery, power).
+   3. (Optional) The Meta+B panel button runs: ~/.local/bin/z13-power settings
+     to open the settings window (lighting, fan curve, battery, power). On
+     non-KDE desktops, bind that command to a key/combo of your choice.
+   4. Non-KDE Wayland (Hyprland/Omarchy): the tray icon needs an SNI-capable
+     system tray and popups need a notification daemon — most setups (incl.
+     Omarchy) ship both. Confirm the tray icon appears; if not, add a tray host.
 
 To verify: run  ~/.local/bin/z13-power status
 EOF

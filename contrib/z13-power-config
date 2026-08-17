@@ -1,6 +1,8 @@
 #!/bin/bash
 #
-# z13-power-config — deploy the packaged KDE PowerDevil config (display/DPMS only).
+# z13-power-config — deploy the packaged KDE Plasma PowerDevil config
+# (display/DPMS only). No-op on other desktops (Hyprland etc. handle their own
+# display/DPMS).
 #
 # Writes ~/.config/powerdevilrc from the system template
 # (/usr/share/z13-power-management/powerdevilrc), backing up any existing file.
@@ -15,6 +17,15 @@ set -euo pipefail
 SRC="/usr/share/z13-power-management/powerdevilrc"
 TARGET="$HOME/.config/powerdevilrc"
 
+DE="${XDG_CURRENT_DESKTOP:-} ${XDG_SESSION_DESKTOP:-}"
+case "$DE" in
+  *[Kk][Dd][Ee]*|*[Pp]lasma*) ;;
+  *)
+    echo "z13-power-config: not KDE Plasma ($DE) — nothing to configure (skipping)"
+    exit 0
+    ;;
+esac
+
 [[ -f "$SRC" ]] || { echo "z13-power-config: $SRC not found (package broken?)" >&2; exit 1; }
 mkdir -p "$HOME/.config"
 if [[ -f "$TARGET" ]]; then
@@ -23,7 +34,7 @@ if [[ -f "$TARGET" ]]; then
 fi
 cp "$SRC" "$TARGET"
 cat <<'EOF'
-Deployed KDE PowerDevil display/DPMS settings to ~/.config/powerdevilrc.
+Deployed KDE Plasma PowerDevil display/DPMS settings to ~/.config/powerdevilrc.
 
 Profile switching is owned by the z13-power tray service — enable it with:
   systemctl --user enable --now z13-power-service

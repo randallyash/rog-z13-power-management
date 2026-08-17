@@ -14,9 +14,13 @@ z13gui overlay drawer. Three components:
   menu / `z13-power settings`): RGB lighting, fan curve editor, battery charge
   limit, panel overdrive, boot sound, live telemetry. Replaces z13gui.
 
-KDE PowerDevil Run Script hooks are intentionally NOT used. Hand-off repo for a
-friend; values are the original owner's per-unit tuning. Packaged as
-`z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
+KDE PowerDevil Run Script hooks are intentionally NOT used — the runtime is
+plain Qt + z13ctl + systemd, so it works on any desktop (KDE Plasma, and
+Hyprland/Omarchy, whose bar already ships an SNI tray + notification daemon).
+Only the optional display/DPMS config (`powerdevilrc`, `z13-power-config`) is
+Plasma-specific. Hand-off repo for a friend; values are the original owner's
+per-unit tuning. Packaged as `z13-power-git` in the pkgbuilds repo. License:
+GPL-3.0-or-later.
 
 ## Layout
 
@@ -24,9 +28,11 @@ friend; values are the original owner's per-unit tuning. Packaged as
 - `service/z13-power-service` — tray + watcher (PyQt6): the only notifier
 - `service/z13-power-settings` — settings window (PyQt6): z13gui replacement
 - `service/z13-power-service.service` — systemd user unit (graphical-session.target)
-- `contrib/z13-power-config` — deploys display-only powerdevilrc
-- `kde/powerdevilrc` — display/DPMS-only template (no RunScript hooks)
-- `install.sh` — from-source installer (fallback; package is preferred)
+- `contrib/z13-power-config` — deploys display-only powerdevilrc (KDE Plasma only;
+  no-ops elsewhere)
+- `kde/powerdevilrc` — display/DPMS-only template (no RunScript hooks; KDE only)
+- `install.sh` — from-source installer (fallback; package is preferred); deploys
+  powerdevilrc only when running KDE Plasma (detected via XDG_CURRENT_DESKTOP)
 - `LICENSE` — GPL-3.0-or-later
 
 ## Mode → z13ctl mapping
@@ -121,8 +127,11 @@ State: `automatic` (default), `manual_mode`, `locked`.
 ## Conflict rules (the important gotchas)
 
 - **z13ctl `autoswitch` must stay OFF** — it races the service on power changes.
-- **KDE per-state power profiles must stay unset** — KDE would write
-  `platform_profile` and fight the service.
+- **No per-state power profiles from the desktop's own power manager** — on KDE
+  that's System Settings → Power Management (writes `platform_profile`); on
+  Omarchy/Hyprland it's the bar's **Power panel** (switches profiles and
+  remembers separate AC/battery choices). Both would fight the service — keep
+  the service as the single switcher.
 - z13ctl daemon required for TDP/fancurve/undervolt persistence. Armoury Crate
   button watcher (daemon) is manual, not a conflict.
 - Notifications are the service's job — don't re-add notify() to z13-power or
