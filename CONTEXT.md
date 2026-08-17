@@ -59,9 +59,12 @@ heavily-commented service.conf so a ConfigParser rewrite can't clobber docs.
 Menu = 5 modes + **Automatic** (exclusive QActionGroup) + **Lock profile**
 (checkbox, enabled only on a manual pick) + **Diagnose…** + **Settings…**
 (launches `z13-power-settings`) + **Quit**. Left/middle
-click CYCLES to the next profile (Trigger); right-click = Plasma-native menu.
-(Menu popups on Plasma Wayland are position-unreliable — that's why left-click
-cycles instead of opening the menu; PyQt6 6.x also lacks QSystemTrayIcon.setMenu.)
+click CYCLES to the next profile (Trigger); right-click opens the menu.
+On Plasma the shell renders the context menu natively; on other SNI trays
+(waybar/Hyprland, etc.) the service pops it itself, with a screen-center
+fallback because Qt's QCursor.pos()-based popup is unreliable on Wayland.
+(Left-click cycles rather than opening the menu because menu popups on Wayland
+are position-unreliable — cycling gives visible feedback instead.)
 
 State: `automatic` (default), `manual_mode`, `locked`.
 - **Executor**: the service runs `z13ctl` DIRECTLY per mode — it no longer

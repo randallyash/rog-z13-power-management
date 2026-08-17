@@ -475,12 +475,26 @@ class Service:
                    " · ".join(fails) or "run 'z13-power diagnose' for details")
 
     def on_activated(self, reason):
-        # Right-click: Plasma renders the context menu natively. Left/middle
-        # click: cycle to the next profile (menu popups on Wayland are
-        # position-unreliable, so cycling gives visible feedback instead).
+        # Right-click: Plasma renders the context menu natively; other SNI
+        # trays (waybar/Hyprland, etc.) need us to pop it ourselves, since
+        # Qt's default popup is positioned via QCursor.pos() and that is
+        # unreliable (often 0,0) on Wayland. Left/middle click: cycle to the
+        # next profile (menu popups on Wayland are position-unreliable, so
+        # cycling gives visible feedback instead).
         if reason in (QSystemTrayIcon.ActivationReason.Trigger,
                       QSystemTrayIcon.ActivationReason.MiddleClick):
             self.cycle()
+        elif reason == QSystemTrayIcon.ActivationReason.Context:
+            if os.environ.get("XDG_CURRENT_DESKTOP", "").strip().lower() != "plasma":
+                self.show_menu()
+
+    def show_menu(self):
+        pos = QCursor.pos()
+        if pos.isNull() or (pos.x() == 0 and pos.y() == 0):
+            screen = self.app.primaryScreen()
+            if screen is not None:
+                pos = screen.availableGeometry().center()
+        self.menu.popup(pos)
 
     def cycle(self):
         cur = self.manual_mode if not self.automatic else self._last_applied
