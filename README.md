@@ -32,7 +32,8 @@ One command, six modes (`z13-power <mode>`) plus a settings window, and a tray a
 `z13-power-service` (system tray):
 - **Tray icon + menu** — left-click cycles profiles, right-click opens the
   menu; five modes + Automatic, current one marked. ROG-style icon tinted by
-  the active profile.
+  the active profile. On SNI trays (Omarchy, waybar, …) the service leaves
+  `IconName` empty so the host renders that pixmap instead of a theme icon.
 - **Automatic** (default) — applies `on_ac` / `on_battery` / `on_low_battery`
   from config on login and power changes
 - **Manual picks** apply immediately; unless **Lock profile** is checked, they
@@ -149,7 +150,10 @@ APIs, no PowerDevil hooks, no autoswitch. Everything runs on any desktop:
   and `notify-send` popups appear with no extra software. On non-KDE Wayland
   desktops the service registers its own StatusNotifierItem + dbusmenu, so the
   tray menu (right-click) is rendered by the bar itself instead of Qt (Qt's
-  tray backend can't pop a menu on Wayland). If the SNI item ever fails to
+  tray backend can't pop a menu on Wayland). The SNI `IconName` is left empty
+  on purpose: hosts prefer a theme name over `IconPixmap`, so advertising
+  `preferences-system-power` made the tray show a fixed yellow power glyph
+  instead of the profile-tinted bolt. If the SNI item ever fails to
   register, the service automatically falls back to the classic Qt tray icon
   (and notifies you) rather than losing the icon. Two things to check:
   - the service auto-starts at login — it hooks `graphical-session.target`

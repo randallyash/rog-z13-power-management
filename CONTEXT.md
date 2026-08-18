@@ -115,7 +115,10 @@ State: `automatic` (default), `manual_mode`, `locked`.
   silently skipped undervolt on this machine until fixed.
 - **Tray icon**: QPainter-drawn ROG-style dark tile + lightning bolt, color
   per mode (performance red, balanced cyan, silent green, max orange, lowpower
-  amber); tooltip shows mode + automatic/manual/locked.
+  amber); tooltip shows mode + automatic/manual/locked. The SNI item must
+  leave `IconName` empty so hosts (Omarchy/waybar) use `IconPixmap`. A
+  non-empty theme name such as `preferences-system-power` wins over the
+  pixmap and shows a fixed yellow glyph on every mode.
 - **Notifications**: `notify-send` on every switch + external change. Single
   notifier — `z13-power` itself is silent.
 - Service PATH (systemd) does NOT include `~/.local/bin` — resolves z13-power
