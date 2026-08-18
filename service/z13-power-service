@@ -467,7 +467,11 @@ if _DBUS_NEXT_OK:
 
         @dbus_property(access=PropertyAccess.READ)
         def IconName(self) -> "s":
-            return "preferences-system-power"
+            # Empty so SNI hosts (Omarchy, waybar, …) use IconPixmap — the
+            # tinted bolt drawn in make_pixmap(). A theme name like
+            # preferences-system-power wins over IconPixmap and shows a
+            # fixed yellow power glyph on every profile.
+            return ""
 
         @dbus_property(access=PropertyAccess.READ)
         def IconPixmap(self) -> "a(iiay)":
