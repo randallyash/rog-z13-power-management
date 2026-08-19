@@ -128,9 +128,13 @@ State: `automatic` (default), `manual_mode`, `locked`.
   refresh does not swallow the icon.
 - **Omarchy theme**: `service/z13_power_theme.py` reads
   `~/.local/state/omarchy/current/theme/{colors,shell}.toml` and the
-  fontconfig monospace family. Applied as Fusion + QSS to the settings
-  window, diagnose dialog, and a frameless ThemedMenu (gtk3 would otherwise
-  draw Adwaita). Live-reloads on theme-set.
+  fontconfig monospace family. Applied as Fusion + QSS to the diagnose
+  dialog and a frameless ThemedMenu (gtk3 would otherwise draw Adwaita).
+  The settings window uses the same tokens as the tray flyout (hero,
+  sidebar nav, section headers, bordered pills, toggle rows) instead of
+  a stock QTabWidget. Live-reloads on theme-set. Launchers prefer
+  `~/.local/bin/z13-power-settings` so a from-source install wins over
+  the packaged `/usr/bin` copy.
 - **Panel IPC**: `~/.local/state/z13-power/status.json` (mode, automatic,
   locked, ac, capacity, tdp, profile) written from `update_tray`.
   `command.json` (`op=mode|automatic|lock`) is consumed by a directory

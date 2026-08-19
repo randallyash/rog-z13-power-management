@@ -1389,8 +1389,10 @@ class Service:
                 self.on_lock_toggled(bool(locked))
 
     def open_settings(self):
+        local = os.path.expanduser("~/.local/bin/z13-power-settings")
+        cmd = local if os.access(local, os.X_OK) else "z13-power-settings"
         try:
-            subprocess.Popen(["z13-power-settings"])
+            subprocess.Popen([cmd])
         except OSError:
             notify("z13-power", "z13-power-settings not found in PATH")
 

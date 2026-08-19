@@ -51,14 +51,16 @@ One command, six modes (`z13-power <mode>`) plus a settings window, and a tray a
   modules) and shows the report with fixes; also checked at service startup
   (only notifies if something is wrong)
 
-`z13-power-settings` (settings window, replaces the z13gui drawer):
+`z13-power-settings` (settings window, replaces the z13gui drawer). On
+Omarchy it follows the live theme — same hero / section-header / pill
+language as the tray flyout — instead of a stock Qt tab dialog:
 - **Lighting** — keyboard + lightbar zones, effect (static / breathe / cycle /
   rainbow / strobe / off), two colors (presets or an HSL picker), speed,
   brightness. Selections persist in `lighting.conf` and are re-applied at login.
 - **Fan curve** — fetch the live 8-point curve, edit temp/speed pairs, apply or
   reset to firmware auto (75 W PL1 safety rules enforced).
 - **Battery** — charge limit slider (40–100%), shows the current limit.
-- **Power** — panel overdrive and boot sound toggles.
+- **Tweaks** — panel overdrive and boot sound toggles.
 - **Profiles** — which mode runs on AC / battery / low battery and the
   low-battery threshold, written back to `service.conf`; "Open config file…"
   exposes the raw file for per-mode TDP / fan curve / undervolt tuning.

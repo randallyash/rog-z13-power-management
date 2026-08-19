@@ -8,7 +8,7 @@
 #   - Lighting:   apply / brightness / off (keyboard + lightbar, two zones)
 #   - Fan curve:  fancurve --get / --set / --reset (8-point curve)
 #   - Battery:    batterylimit --get / --set (charge cap 40–100)
-#   - Power:      paneloverdrive, bootsound (firmware attributes)
+#   - Tweaks:     paneloverdrive, bootsound (firmware attributes)
 #   - Telemetry:  live status readouts (APU temp, fan RPM, profile, TDP)
 #   - Profiles:   service.conf [service] section (AC/battery/low-battery modes)
 #
@@ -20,18 +20,18 @@
 # Requires: z13ctl, python-pyqt6.
 
 import configparser
+import json
 import os
 import re
 import subprocess
 import sys
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QPixmap, QIcon
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox,
-                             QFormLayout, QGridLayout, QHBoxLayout, QLabel,
-                             QMainWindow, QPushButton, QSlider, QSpinBox,
-                             QTabWidget, QVBoxLayout, QWidget)
-
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (QApplication, QColorDialog, QFrame, QGridLayout,
+                             QHBoxLayout, QLabel, QMainWindow, QScrollArea,
+                             QSlider, QSpinBox, QStackedWidget, QVBoxLayout,
+                             QWidget)
 
 def _theme_mod():
     here = os.path.dirname(os.path.realpath(__file__))
@@ -46,6 +46,7 @@ def _theme_mod():
 
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
 CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
+STATUS_PATH = os.path.expanduser("~/.local/state/z13-power/status.json")
 
 LIGHTING_MODES = ["static", "breathe", "cycle", "rainbow", "strobe", "off"]
 BRIGHTNESS_LEVELS = ["off", "low", "medium", "high"]
@@ -63,6 +64,24 @@ DEFAULT_LIGHTING = {
     "device": "all", "mode": "static", "color1": "FF0000",
     "color2": "000000", "speed": "normal", "brightness": "high",
 }
+
+MODE_OPTIONS = [
+    ("performance", "Performance"),
+    ("balanced", "Balanced"),
+    ("silent", "Silent"),
+    ("max", "Max"),
+    ("lowpower", "Low power"),
+]
+VALID_MODES = [m[0] for m in MODE_OPTIONS]
+
+NAV = [
+    ("lighting", "Lighting", "\uf0eb"),
+    ("fan", "Fan curve", "\U000f0210"),
+    ("battery", "Battery", "\uf240"),
+    ("power", "Tweaks", "\uf0e7"),
+    ("profiles", "Profiles", "\U000f062e"),
+    ("telemetry", "Telemetry", "\U000f012a"),
+]
 
 
 def z13ctl(args, timeout=30):
@@ -127,8 +146,6 @@ CONFIG_DEFAULTS = {
     "on_low_battery": "silent",
 }
 
-VALID_MODES = ["performance", "balanced", "silent", "max", "lowpower"]
-
 
 def load_service_config():
     """Read the [service] section of service.conf; return {key: value}."""
@@ -175,6 +192,8 @@ def save_service_config(updates):
     with open(CONFIG_PATH, "w") as f:
         f.writelines(lines)
     return CONFIG_PATH
+
+
 # ── status / telemetry parsing ───────────────────────────────────────────────
 
 def z13_status():
@@ -231,91 +250,97 @@ def tdp_pl1():
     return 0
 
 
-# ── window ───────────────────────────────────────────────────────────────────
+def read_status_file():
+    try:
+        with open(STATUS_PATH, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
 
-class ColorSwatch(QPushButton):
-    """A flat color button that emits clicked with its hex value."""
 
-    def __init__(self, hexval, parent=None):
-        super().__init__(parent)
-        self.hexval = hexval
-        self.setFixedSize(28, 28)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._paint()
-        self.setCheckable(True)
-
-    def _paint(self):
-        pm = QPixmap(24, 24)
-        pm.fill(QColor(f"#{self.hexval}"))
-        self.setIcon(QIcon(pm))
-        self.setStyleSheet("padding: 2px;")
-
+# ── pages ────────────────────────────────────────────────────────────────────
 
 class LightingTab(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, theme, parent=None):
         super().__init__(parent)
+        T = _theme_mod()
+        self.theme = theme
         self.lighting = load_lighting()
 
-        form = QFormLayout(self)
-        self.device_combo = QComboBox()
-        self.device_combo.addItems(DEVICES)
-        self.device_combo.setCurrentText(self.lighting["device"])
-        form.addRow("Device:", self.device_combo)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(10)
 
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(LIGHTING_MODES)
-        self.mode_combo.setCurrentText(self.lighting["mode"])
-        form.addRow("Effect:", self.mode_combo)
+        layout.addWidget(T.SectionHeader("DEVICE", theme))
+        self.device_row = T.PillRow(DEVICES, theme)
+        self.device_row.set_value(self.lighting["device"])
+        layout.addWidget(self.device_row)
 
-        self.color1_swatches = self._color_row(form, "Color 1:")
-        self.color2_swatches = self._color_row(form, "Color 2:")
+        layout.addWidget(T.SectionHeader("EFFECT", theme))
+        self.mode_row = T.PillRow(LIGHTING_MODES, theme)
+        self.mode_row.set_value(self.lighting["mode"])
+        layout.addWidget(self.mode_row)
 
-        self.speed_combo = QComboBox()
-        self.speed_combo.addItems(SPEEDS)
-        self.speed_combo.setCurrentText(self.lighting["speed"])
-        form.addRow("Speed:", self.speed_combo)
+        layout.addWidget(T.SectionHeader("COLOR 1", theme))
+        self.color1_swatches = self._color_row(layout, T, theme)
+        layout.addWidget(T.SectionHeader("COLOR 2", theme))
+        self.color2_swatches = self._color_row(layout, T, theme)
 
-        self.brightness_combo = QComboBox()
-        self.brightness_combo.addItems(BRIGHTNESS_LEVELS)
-        self.brightness_combo.setCurrentText(self.lighting["brightness"])
-        form.addRow("Brightness:", self.brightness_combo)
+        layout.addWidget(T.SectionHeader("SPEED", theme))
+        self.speed_row = T.PillRow(SPEEDS, theme)
+        self.speed_row.set_value(self.lighting["speed"])
+        layout.addWidget(self.speed_row)
+
+        layout.addWidget(T.SectionHeader("BRIGHTNESS", theme))
+        self.brightness_row = T.PillRow(BRIGHTNESS_LEVELS, theme)
+        self.brightness_row.set_value(self.lighting["brightness"])
+        layout.addWidget(self.brightness_row)
 
         buttons = QHBoxLayout()
-        self.apply_btn = QPushButton("Apply lighting")
+        buttons.setSpacing(6)
+        self.apply_btn = T.Pill("Apply lighting", theme)
+        self.apply_btn.setCheckable(False)
         self.apply_btn.clicked.connect(self.on_apply)
-        self.off_btn = QPushButton("Turn off")
+        self.off_btn = T.Pill("Turn off", theme)
+        self.off_btn.setCheckable(False)
         self.off_btn.clicked.connect(self.on_off)
         buttons.addWidget(self.apply_btn)
         buttons.addWidget(self.off_btn)
-        form.addRow(buttons)
+        layout.addLayout(buttons)
 
-        self.status = QLabel("")
-        self.status.setWordWrap(True)
-        form.addRow(self.status)
+        self.status = T.StatusLine(theme)
+        layout.addWidget(self.status)
+        layout.addStretch(1)
 
-        # Default the selected swatch to the configured colors.
         self._set_swatch(self.color1_swatches, self.lighting["color1"])
         self._set_swatch(self.color2_swatches, self.lighting["color2"])
 
-    def _color_row(self, form, label):
+    def _color_row(self, layout, T, theme):
         row = QWidget()
         h = QHBoxLayout(row)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(4)
         swatches = []
+        group = []
         for name, hexval in PRESET_COLORS:
-            sw = ColorSwatch(hexval)
-            sw.clicked.connect(self._on_swatch)
+            sw = T.ColorPill(hexval, theme)
             sw.setToolTip(name)
+            sw.clicked.connect(lambda _c=False, s=sw, lst=group: self._pick(lst, s))
             swatches.append(sw)
+            group.append(sw)
             h.addWidget(sw)
-        custom = QPushButton("Custom\u2026")
-        custom.setCursor(Qt.CursorShape.PointingHandCursor)
-        custom.clicked.connect(lambda _c=False, t=swatches: self._on_custom(t))
+        custom = T.Pill("Custom…", theme)
+        custom.setCheckable(False)
+        custom.setMaximumWidth(110)
+        custom.clicked.connect(lambda _c=False, lst=swatches: self._on_custom(lst))
         h.addWidget(custom)
         h.addStretch(1)
-        form.addRow(label, row)
+        layout.addWidget(row)
         return swatches
+
+    def _pick(self, swatches, target):
+        for sw in swatches:
+            sw.setChecked(sw is target)
 
     def _set_swatch(self, swatches, hexval):
         hexval = hexval.lstrip("#").lower()
@@ -325,8 +350,7 @@ class LightingTab(QWidget):
                 target = sw
         if target is None:
             return
-        for sw in swatches:
-            sw.setChecked(sw is target)
+        self._pick(swatches, target)
 
     def _selected(self, swatches):
         for sw in swatches:
@@ -334,68 +358,63 @@ class LightingTab(QWidget):
                 return sw.hexval
         return swatches[0].hexval
 
-    def _on_swatch(self):
-        # Ignore clicks that merely check a button; the apply button commits.
-        pass
-
     def _on_custom(self, target):
         current = QColor("#" + self._selected(target).lstrip("#"))
         color = QColorDialog.getColor(current, self, "Pick a color")
         if not color.isValid():
             return
         hexval = color.name().lstrip("#")
-        for sw in target:
-            sw.setChecked(False)
-        # Reuse the first swatch to hold the custom color.
         custom_sw = target[0]
-        custom_sw.hexval = hexval
-        custom_sw._paint()
-        custom_sw.setChecked(True)
-        self.status.setText(f"Color {hexval} selected — press Apply")
+        custom_sw.set_hex(hexval)
+        self._pick(target, custom_sw)
+        self.status.set_info(f"Color {hexval} selected — press Apply")
 
     def _collect(self):
         return {
-            "device": self.device_combo.currentText(),
-            "mode": self.mode_combo.currentText(),
+            "device": self.device_row.value(),
+            "mode": self.mode_row.value(),
             "color1": self._selected(self.color1_swatches).lstrip("#"),
             "color2": self._selected(self.color2_swatches).lstrip("#"),
-            "speed": self.speed_combo.currentText(),
-            "brightness": self.brightness_combo.currentText(),
+            "speed": self.speed_row.value(),
+            "brightness": self.brightness_row.value(),
         }
 
     def on_apply(self):
         lighting = self._collect()
         save_lighting(lighting)
         ok, msg = apply_lighting(lighting)
-        self.status.setText((msg + " \u2713" if ok else
-                             f"{msg} — failed (check z13ctl / permissions)"))
-        self.status.setStyleSheet("color: %s;" %
-                                  ("#3ddc6f" if ok else "#ff3131"))
+        self.status.set_result(ok, msg + " ✓" if ok else
+                               f"{msg} — failed (check z13ctl / permissions)")
 
     def on_off(self):
         lighting = self._collect()
         lighting["mode"] = "off"
         save_lighting(lighting)
-        self.mode_combo.setCurrentText("off")
+        self.mode_row.set_value("off")
         ok, msg = apply_lighting(lighting)
-        self.status.setText((msg + " \u2713" if ok else
-                             f"{msg} — failed (check z13ctl / permissions)"))
-        self.status.setStyleSheet("color: %s;" %
-                                  ("#3ddc6f" if ok else "#ff3131"))
+        self.status.set_result(ok, msg + " ✓" if ok else
+                               f"{msg} — failed (check z13ctl / permissions)")
 
 
 class FanTab(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, theme, parent=None):
         super().__init__(parent)
+        T = _theme_mod()
         v = QVBoxLayout(self)
+        v.setContentsMargins(4, 0, 4, 0)
+        v.setSpacing(14)
 
-        self.info = QLabel("")
-        self.info.setWordWrap(True)
+        self.info = T.Note("", theme)
         v.addWidget(self.info)
 
+        v.addWidget(T.SectionHeader("CURVE POINTS", theme))
         grid = QGridLayout()
-        grid.addWidget(QLabel("Temp (°C)"), 0, 0)
-        grid.addWidget(QLabel("PWM (0–255)"), 0, 1)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(6)
+        temp_h = T.SectionHeader("TEMP (°C)", theme)
+        pwm_h = T.SectionHeader("PWM (0–255)", theme)
+        grid.addWidget(temp_h, 0, 0)
+        grid.addWidget(pwm_h, 0, 1)
         self.temp_spins, self.pwm_spins = [], []
         for i in range(8):
             ts = QSpinBox()
@@ -411,22 +430,24 @@ class FanTab(QWidget):
         v.addLayout(grid)
 
         buttons = QHBoxLayout()
-        self.fetch_btn = QPushButton("Fetch current")
+        buttons.setSpacing(6)
+        self.fetch_btn = T.Pill("Fetch current", theme)
+        self.fetch_btn.setCheckable(False)
         self.fetch_btn.clicked.connect(self.fetch)
-        self.apply_btn = QPushButton("Apply curve")
+        self.apply_btn = T.Pill("Apply curve", theme)
+        self.apply_btn.setCheckable(False)
         self.apply_btn.clicked.connect(self.apply)
-        self.reset_btn = QPushButton("Reset to auto")
+        self.reset_btn = T.Pill("Reset to auto", theme)
+        self.reset_btn.setCheckable(False)
         self.reset_btn.clicked.connect(self.reset)
         buttons.addWidget(self.fetch_btn)
         buttons.addWidget(self.apply_btn)
         buttons.addWidget(self.reset_btn)
         v.addLayout(buttons)
 
-        self.msg = QLabel("")
-        self.msg.setWordWrap(True)
+        self.msg = T.StatusLine(theme)
         v.addWidget(self.msg)
         v.addStretch(1)
-
         self.fetch()
 
     def fetch(self):
@@ -436,12 +457,13 @@ class FanTab(QWidget):
                 self.temp_spins[i].setValue(temp)
                 self.pwm_spins[i].setValue(pwm)
         pl1 = tdp_pl1()
-        self.info.setText(
-            f"Fan mode: {mode or 'unknown'}\n"
-            f"PL1: {pl1} W" + (" — above 75 W: every point must be ≥50% PWM "
-                                "and reset is refused" if pl1 > 75 else ""))
-        self.msg.setText("Fetched current curve." if len(points) == 8 else
-                         "Could not read the current fan curve.")
+        extra = (" — above 75 W: every point must be ≥50% PWM and reset is "
+                 "refused" if pl1 > 75 else "")
+        self.info.setText(f"Fan mode: {mode or 'unknown'}. PL1: {pl1} W{extra}")
+        if len(points) == 8:
+            self.msg.set_info("Fetched current curve.")
+        else:
+            self.msg.set_result(False, "Could not read the current fan curve.")
 
     def _curve_string(self):
         temps = [ts.value() for ts in self.temp_spins]
@@ -461,58 +483,58 @@ class FanTab(QWidget):
         try:
             curve = self._curve_string()
         except ValueError as e:
-            self.msg.setText(f"Invalid curve: {e}")
-            self.msg.setStyleSheet("color: #ff3131;")
+            self.msg.set_result(False, f"Invalid curve: {e}")
             return
         r = z13ctl(["fancurve", "--set", curve])
         ok = r is not None and r.returncode == 0
-        self.msg.setText("Fan curve applied. (The daemon re-applies it after "
-                         "any profile change.)" if ok else
-                         "Failed to apply the fan curve.")
-        self.msg.setStyleSheet("color: %s;" % ("#3ddc6f" if ok else "#ff3131"))
+        self.msg.set_result(ok, "Fan curve applied. (The daemon re-applies it "
+                            "after any profile change.)" if ok else
+                            "Failed to apply the fan curve.")
 
     def reset(self):
         r = z13ctl(["fancurve", "--reset"])
         ok = r is not None and r.returncode == 0
-        self.msg.setText("Restored firmware auto fan mode." if ok else
-                         "Failed to reset — refused above 75 W PL1?")
-        self.msg.setStyleSheet("color: %s;" % ("#3ddc6f" if ok else "#ff3131"))
+        self.msg.set_result(ok, "Restored firmware auto fan mode." if ok else
+                            "Failed to reset — refused above 75 W PL1?")
         self.fetch()
 
 
 class BatteryTab(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, theme, parent=None):
         super().__init__(parent)
+        T = _theme_mod()
         v = QVBoxLayout(self)
+        v.setContentsMargins(4, 0, 4, 0)
+        v.setSpacing(14)
 
-        self.current = QLabel("")
+        v.addWidget(T.SectionHeader("CHARGE LIMIT", theme))
+        self.current = T.InfoRow("Current", "—", theme)
         v.addWidget(self.current)
 
         row = QHBoxLayout()
+        row.setSpacing(12)
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(40, 100)
         self.slider.setValue(80)
         self.value_label = QLabel("80%")
         self.slider.valueChanged.connect(
             lambda n: self.value_label.setText(f"{n}%"))
-        row.addWidget(self.slider)
+        row.addWidget(self.slider, 1)
         row.addWidget(self.value_label)
         v.addLayout(row)
 
-        self.apply_btn = QPushButton("Set charge limit")
+        self.apply_btn = T.Pill("Set charge limit", theme)
+        self.apply_btn.setCheckable(False)
         self.apply_btn.clicked.connect(self.apply)
         v.addWidget(self.apply_btn)
 
-        note = QLabel("100% removes the limit (charge to full). The limit is "
-                      "set in ACPI and persists across reboots.")
-        note.setWordWrap(True)
-        note.setStyleSheet("color: #9aa;")
-        v.addWidget(note)
+        v.addWidget(T.Note(
+            "100% removes the limit (charge to full). The limit is set in "
+            "ACPI and persists across reboots.", theme))
 
-        self.msg = QLabel("")
+        self.msg = T.StatusLine(theme)
         v.addWidget(self.msg)
         v.addStretch(1)
-
         self.refresh()
 
     def refresh(self):
@@ -521,44 +543,48 @@ class BatteryTab(QWidget):
             try:
                 val = int(r.stdout.strip())
                 self.slider.setValue(val)
-                self.current.setText(f"Current charge limit: {val}%")
+                self.current.set_value(f"{val}%")
                 return
             except ValueError:
                 pass
-        self.current.setText("Current charge limit: unknown")
+        self.current.set_value("unknown")
 
     def apply(self):
         val = self.slider.value()
         r = z13ctl(["batterylimit", "--set", str(val)])
         ok = r is not None and r.returncode == 0
-        self.msg.setText(f"Charge limit set to {val}%." if ok else
-                         "Failed to set the charge limit.")
-        self.msg.setStyleSheet("color: %s;" % ("#3ddc6f" if ok else "#ff3131"))
+        self.msg.set_result(ok, f"Charge limit set to {val}%." if ok else
+                            "Failed to set the charge limit.")
         self.refresh()
 
 
 class PowerTab(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, theme, parent=None):
         super().__init__(parent)
+        T = _theme_mod()
         v = QVBoxLayout(self)
+        v.setContentsMargins(4, 0, 4, 0)
+        v.setSpacing(10)
 
-        self.panel = QCheckBox("Panel overdrive (faster pixel response; may "
-                               "cause slight ghosting)")
+        v.addWidget(T.SectionHeader("DISPLAY", theme))
+        self.panel = T.ToggleRow(
+            "Panel overdrive",
+            "Faster pixel response; may cause slight ghosting",
+            theme)
+        self.panel.clicked.connect(self.apply_panel)
         v.addWidget(self.panel)
-        self.panel_btn = QPushButton("Apply panel overdrive")
-        self.panel_btn.clicked.connect(self.apply_panel)
-        v.addWidget(self.panel_btn)
 
-        self.boot = QCheckBox("Boot sound (audible POST beep on startup)")
+        v.addWidget(T.SectionHeader("FIRMWARE", theme))
+        self.boot = T.ToggleRow(
+            "Boot sound",
+            "Audible POST beep on startup",
+            theme)
+        self.boot.clicked.connect(self.apply_boot)
         v.addWidget(self.boot)
-        self.boot_btn = QPushButton("Apply boot sound")
-        self.boot_btn.clicked.connect(self.apply_boot)
-        v.addWidget(self.boot_btn)
 
-        self.msg = QLabel("")
+        self.msg = T.StatusLine(theme)
         v.addWidget(self.msg)
         v.addStretch(1)
-
         self.refresh()
 
     def refresh(self):
@@ -570,31 +596,42 @@ class PowerTab(QWidget):
             self.boot.setChecked(r.stdout.strip() == "1")
 
     def apply_panel(self):
-        val = "1" if self.panel.isChecked() else "0"
+        nxt = not self.panel.isChecked()
+        val = "1" if nxt else "0"
         r = z13ctl(["paneloverdrive", "--set", val])
         ok = r is not None and r.returncode == 0
-        self.msg.setText("Panel overdrive updated." if ok else
-                         "Failed to set panel overdrive.")
-        self.msg.setStyleSheet("color: %s;" % ("#3ddc6f" if ok else "#ff3131"))
+        if ok:
+            self.panel.setChecked(nxt)
+        self.msg.set_result(ok, "Panel overdrive updated." if ok else
+                            "Failed to set panel overdrive.")
 
     def apply_boot(self):
-        val = "1" if self.boot.isChecked() else "0"
+        nxt = not self.boot.isChecked()
+        val = "1" if nxt else "0"
         r = z13ctl(["bootsound", "--set", val])
         ok = r is not None and r.returncode == 0
-        self.msg.setText("Boot sound updated." if ok else
-                         "Failed to set boot sound.")
-        self.msg.setStyleSheet("color: %s;" % ("#3ddc6f" if ok else "#ff3131"))
+        if ok:
+            self.boot.setChecked(nxt)
+        self.msg.set_result(ok, "Boot sound updated." if ok else
+                            "Failed to set boot sound.")
 
 
 class TelemetryTab(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, theme, parent=None):
         super().__init__(parent)
-        form = QFormLayout(self)
+        T = _theme_mod()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(4, 0, 4, 0)
+        v.setSpacing(10)
+
+        v.addWidget(T.SectionHeader("LIVE STATUS", theme))
         self.fields = {}
         for key in ("APU temperature", "Fans", "Profile", "Power", "TDP",
                     "Battery"):
-            self.fields[key] = QLabel("\u2014")
-            form.addRow(f"{key}:", self.fields[key])
+            row = T.InfoRow(key, "—", theme)
+            self.fields[key] = row
+            v.addWidget(row)
+        v.addStretch(1)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(2000)
@@ -607,58 +644,67 @@ class TelemetryTab(QWidget):
                    "TDP": "TDP", "Battery": "Battery"}
         for key, src in mapping.items():
             if src in st:
-                self.fields[key].setText(st[src])
+                self.fields[key].set_value(st[src])
 
 
 class ConfigTab(QWidget):
     """Edit the [service] section: which mode each power state uses."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        v = QVBoxLayout(self)
 
-        self.on_ac = QComboBox()
-        self.on_battery = QComboBox()
-        self.on_low = QComboBox()
-        for cb in (self.on_ac, self.on_battery, self.on_low):
-            cb.addItems(VALID_MODES)
+    def __init__(self, theme, parent=None):
+        super().__init__(parent)
+        T = _theme_mod()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(4, 0, 4, 0)
+        v.setSpacing(14)
+
+        v.addWidget(T.SectionHeader("ON AC", theme))
+        self.on_ac = T.PillRow(MODE_OPTIONS, theme)
+        v.addWidget(self.on_ac)
+
+        v.addWidget(T.SectionHeader("ON BATTERY", theme))
+        self.on_battery = T.PillRow(MODE_OPTIONS, theme)
+        v.addWidget(self.on_battery)
+
+        v.addWidget(T.SectionHeader("ON LOW BATTERY", theme))
+        self.on_low = T.PillRow(MODE_OPTIONS, theme)
+        v.addWidget(self.on_low)
+
+        v.addWidget(T.SectionHeader("LOW BATTERY THRESHOLD", theme))
+        thresh = QHBoxLayout()
         self.threshold = QSpinBox()
         self.threshold.setRange(5, 50)
         self.threshold.setSuffix(" %")
+        thresh.addWidget(self.threshold)
+        thresh.addStretch(1)
+        v.addLayout(thresh)
 
-        form = QFormLayout()
-        form.addRow("On AC:", self.on_ac)
-        form.addRow("On battery:", self.on_battery)
-        form.addRow("On low battery:", self.on_low)
-        form.addRow("Low battery threshold:", self.threshold)
-        v.addLayout(form)
+        v.addWidget(T.Note(
+            "These decide which profile the tray service applies in Automatic "
+            "mode. The service reloads service.conf every ~30s, so saved "
+            "changes take effect without a restart.", theme))
 
-        note = QLabel("These decide which profile the tray service applies in "
-                      "Automatic mode. The service reloads service.conf every "
-                      "~30s, so saved changes take effect without a restart.")
-        note.setWordWrap(True)
-        note.setStyleSheet("color: #9aa;")
-        v.addWidget(note)
-
-        self.save_btn = QPushButton("Save")
+        buttons = QHBoxLayout()
+        buttons.setSpacing(6)
+        self.save_btn = T.Pill("Save", theme)
+        self.save_btn.setCheckable(False)
         self.save_btn.clicked.connect(self.save)
-        v.addWidget(self.save_btn)
-
-        self.open_btn = QPushButton("Open config file…")
+        self.open_btn = T.Pill("Open config file…", theme)
+        self.open_btn.setCheckable(False)
         self.open_btn.clicked.connect(self.open_config)
-        v.addWidget(self.open_btn)
+        buttons.addWidget(self.save_btn)
+        buttons.addWidget(self.open_btn)
+        v.addLayout(buttons)
 
-        self.msg = QLabel("")
-        self.msg.setWordWrap(True)
+        self.msg = T.StatusLine(theme)
         v.addWidget(self.msg)
         v.addStretch(1)
-
         self.refresh()
 
     def refresh(self):
         cfg = load_service_config()
-        self.on_ac.setCurrentText(cfg["on_ac"])
-        self.on_battery.setCurrentText(cfg["on_battery"])
-        self.on_low.setCurrentText(cfg["on_low_battery"])
+        self.on_ac.set_value(cfg["on_ac"])
+        self.on_battery.set_value(cfg["on_battery"])
+        self.on_low.set_value(cfg["on_low_battery"])
         try:
             self.threshold.setValue(int(cfg["low_battery"]))
         except ValueError:
@@ -666,19 +712,17 @@ class ConfigTab(QWidget):
 
     def save(self):
         updates = {
-            "on_ac": self.on_ac.currentText(),
-            "on_battery": self.on_battery.currentText(),
-            "on_low_battery": self.on_low.currentText(),
+            "on_ac": self.on_ac.value(),
+            "on_battery": self.on_battery.value(),
+            "on_low_battery": self.on_low.value(),
             "low_battery": str(self.threshold.value()),
         }
         try:
             save_service_config(updates)
         except OSError as e:
-            self.msg.setText(f"Could not write config: {e}")
-            self.msg.setStyleSheet("color: #ff3131;")
+            self.msg.set_result(False, f"Could not write config: {e}")
             return
-        self.msg.setText("Saved - the service reloads config within ~30s.")
-        self.msg.setStyleSheet("color: #3ddc6f;")
+        self.msg.set_result(True, "Saved — the service reloads config within ~30s.")
 
     def open_config(self):
         """Open service.conf in $VISUAL/$EDITOR (fallback xdg-open)."""
@@ -689,39 +733,125 @@ class ConfigTab(QWidget):
             else:
                 subprocess.Popen(["xdg-open", CONFIG_PATH])
         except OSError:
-            self.msg.setText(f"Config: {CONFIG_PATH}")
-            self.msg.setStyleSheet("color: #ff3131;")
+            self.msg.set_result(False, f"Config: {CONFIG_PATH}")
+
+
 class SettingsWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, theme):
         super().__init__()
-        self.setWindowTitle("z13-power settings")
-        self.resize(560, 460)
-        tabs = QTabWidget(self)
-        tabs.addTab(LightingTab(), "Lighting")
-        tabs.addTab(FanTab(), "Fan curve")
-        tabs.addTab(BatteryTab(), "Battery")
-        tabs.addTab(PowerTab(), "Power")
-        tabs.addTab(ConfigTab(), "Profiles")
-        tabs.addTab(TelemetryTab(), "Telemetry")
-        self.setCentralWidget(tabs)
-        # Telemetry polling dies with the process; stop it on close.
+        T = _theme_mod()
+        self.theme = theme
+        self.setWindowTitle("z13-power-settings")
+        self.resize(800, 660)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+        root = QWidget()
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(16, 14, 16, 14)
+        outer.setSpacing(12)
+
+        self.hero = T.Hero("\uf0e7", "Settings", "Z13 power", theme)
+        outer.addWidget(self.hero)
+        outer.addWidget(T.HLine(theme))
+
+        body = QHBoxLayout()
+        body.setSpacing(16)
+
+        nav = QVBoxLayout()
+        nav.setSpacing(4)
+        nav.setContentsMargins(0, 0, 0, 0)
+        self.nav_items = []
+        self.stack = QStackedWidget()
+        pages = [
+            ("lighting", LightingTab(theme)),
+            ("fan", FanTab(theme)),
+            ("battery", BatteryTab(theme)),
+            ("power", PowerTab(theme)),
+            ("profiles", ConfigTab(theme)),
+            ("telemetry", TelemetryTab(theme)),
+        ]
+        self.pages = {}
+        for i, (_key, label, glyph) in enumerate(NAV):
+            item = T.NavItem(glyph, label, theme)
+            item.clicked.connect(lambda _c=False, idx=i: self.stack.setCurrentIndex(idx))
+            nav.addWidget(item)
+            self.nav_items.append(item)
+        for key, widget in pages:
+            self.pages[key] = widget
+            self.stack.addWidget(self._scroll(widget))
+        if self.nav_items:
+            self.nav_items[0].setChecked(True)
+        nav.addStretch(1)
+
+        nav_wrap = QWidget()
+        nav_wrap.setLayout(nav)
+        nav_wrap.setFixedWidth(168)
+        body.addWidget(nav_wrap)
+        sep = QWidget()
+        sep.setFixedWidth(1)
+        sep.setStyleSheet(f"background: {theme['control_border']};")
+        self._sep = sep
+        body.addWidget(sep)
+        body.addWidget(self.stack, 1)
+        outer.addLayout(body, 1)
+
+        self.setCentralWidget(root)
+        self._refresh_hero()
+        self.hero_timer = QTimer(self)
+        self.hero_timer.timeout.connect(self._refresh_hero)
+        self.hero_timer.start(2000)
+
+    def _scroll(self, widget):
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        area.setWidget(widget)
+        return area
+
+    def _refresh_hero(self):
+        st = read_status_file()
+        tdp = st.get("tdp")
+        label = st.get("label") or st.get("mode") or ""
+        meta = str(label) if label else "Z13 power"
+        if st.get("automatic") is True:
+            meta = f"{meta} · automatic"
+        elif st.get("locked") is True:
+            meta = f"{meta} · locked"
+        self.hero.set_meta(meta)
+        self.hero.set_detail("" if tdp in (None, "") else f"{tdp}W")
+
+    def apply_theme(self, theme):
+        self.theme = theme
+        T = _theme_mod()
+        T._apply_children(self, theme)
+        self._sep.setStyleSheet(f"background: {theme['control_border']};")
 
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("z13-power")
+    app.setApplicationName("z13-power-settings")
+    app.setDesktopFileName("z13-power-settings")
+    theme_mod = _theme_mod()
+    theme = theme_mod.load_theme()
     try:
-        theme = _theme_mod()
-        theme.apply_to_app(app)
-        watcher = theme.ThemeWatcher(app)
-        watcher.changed.connect(lambda: theme.apply_to_app(app))
+        theme_mod.apply_to_app(app, theme)
+        watcher = theme_mod.ThemeWatcher(app)
+        watcher.changed.connect(lambda: _reload_theme(app, theme_mod))
         app._theme_watcher = watcher
     except Exception:
         pass
-    win = SettingsWindow()
+    win = SettingsWindow(theme)
+    app._settings_win = win
     win.show()
     return app.exec()
+
+
+def _reload_theme(app, theme_mod):
+    theme = theme_mod.apply_to_app(app)
+    win = getattr(app, "_settings_win", None)
+    if win is not None:
+        win.apply_theme(theme)
 
 
 if __name__ == "__main__":
