@@ -40,6 +40,42 @@ reset_undervolt() {
   z13ctl undervolt --reset
 }
 
+firmware_profile() {
+  cat /sys/firmware/acpi/platform_profile 2>/dev/null || true
+}
+
+custom_fan_pwm_enable() {
+  local hwmon
+  for hwmon in /sys/class/hwmon/hwmon*; do
+    [[ -f "$hwmon/name" ]] || continue
+    [[ "$(cat "$hwmon/name" 2>/dev/null)" == asus_custom_fan_curve ]] || continue
+    cat "$hwmon/pwm1_enable" 2>/dev/null || true
+    return 0
+  done
+}
+
+# Rewriting the same firmware profile still hits platform_profile, which
+# restores stock PPT (performance = 70W) and drops custom fan curves.
+# Skip the write when we're already there; after a real switch, wait until
+# fans are in auto so a following --force TDP can install its safety curve.
+set_profile() {
+  local want="$1"
+  local wait_force="${2:-0}"
+  [[ "$(firmware_profile)" == "$want" ]] && return 0
+  z13ctl profile --set "$want"
+  [[ "$wait_force" == "1" ]] || return 0
+  local i matched=0
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if [[ "$(firmware_profile)" == "$want" && "$(custom_fan_pwm_enable)" == "2" ]]; then
+      matched=$((matched + 1))
+      (( matched >= 2 )) && return 0
+    else
+      matched=0
+    fi
+    sleep 0.05
+  done
+}
+
 # Notifications are owned by the z13-power-service tray app; this script
 # applies profiles silently.
 
@@ -161,7 +197,7 @@ esac
 case "${1:-}" in
   balanced)
     require_z13ctl
-    z13ctl profile --set balanced
+    set_profile balanced
     z13ctl tdp --set 52 --pl2 71 --pl3 70
     z13ctl fancurve --reset
     reset_undervolt
@@ -169,7 +205,7 @@ case "${1:-}" in
     ;;
   performance)
     require_z13ctl
-    z13ctl profile --set performance
+    set_profile performance
     z13ctl tdp --set 75 --pl1 75 --pl2 93 --pl3 93
     z13ctl fancurve --reset
     reset_undervolt
@@ -177,14 +213,14 @@ case "${1:-}" in
     ;;
   max)
     require_z13ctl
-    z13ctl profile --set performance
+    set_profile performance 1
     z13ctl tdp --set 93 --force
     reset_undervolt
 
     ;;
   silent)
     require_z13ctl
-    z13ctl profile --set quiet
+    set_profile quiet
     z13ctl tdp --set 20 --pl2 40 --pl3 40
     z13ctl fancurve --reset
     apply_undervolt -20
@@ -192,7 +228,7 @@ case "${1:-}" in
     ;;
   lowpower)
     require_z13ctl
-    z13ctl profile --set quiet
+    set_profile quiet
     z13ctl tdp --set 5
     z13ctl fancurve --reset
     apply_undervolt -25
