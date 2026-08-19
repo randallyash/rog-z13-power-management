@@ -222,57 +222,67 @@ undervolt = -25
 """
 
 
-def read_power():
-    """Return (ac_online: bool, capacity: int|None)."""
-    ac = False
-    capacity = None
-    for d in os.listdir("/sys/class/power_supply"):
+_ac_online_path = None
+_bat_capacity_path = None
+
+
+def _discover_power_paths():
+    """Resolve AC/battery sysfs files once; retry if a path disappears."""
+    global _ac_online_path, _bat_capacity_path
+    _ac_online_path = None
+    _bat_capacity_path = None
+    try:
+        names = os.listdir("/sys/class/power_supply")
+    except OSError:
+        return
+    for d in names:
         base = os.path.join("/sys/class/power_supply", d)
         if not os.path.isdir(base):
             continue
-        if d in ("AC", "ACAD", "AC0") or d.startswith("ADP"):
-            try:
-                with open(os.path.join(base, "online")) as f:
-                    ac = f.read().strip() == "1"
-            except OSError:
-                pass
-        elif d.startswith("BAT") and capacity is None:
-            try:
-                with open(os.path.join(base, "capacity")) as f:
-                    capacity = int(f.read().strip())
-            except OSError:
-                pass
+        if _ac_online_path is None and (
+                d in ("AC", "ACAD", "AC0") or d.startswith("ADP")):
+            path = os.path.join(base, "online")
+            if os.path.isfile(path):
+                _ac_online_path = path
+        elif _bat_capacity_path is None and d.startswith("BAT"):
+            path = os.path.join(base, "capacity")
+            if os.path.isfile(path):
+                _bat_capacity_path = path
+        if _ac_online_path and _bat_capacity_path:
+            return
+
+
+def read_power():
+    """Return (ac_online: bool, capacity: int|None)."""
+    if _ac_online_path is None and _bat_capacity_path is None:
+        _discover_power_paths()
+    ac = False
+    capacity = None
+    if _ac_online_path:
+        try:
+            with open(_ac_online_path) as f:
+                ac = f.read().strip() == "1"
+        except OSError:
+            _discover_power_paths()
+            if _ac_online_path:
+                try:
+                    with open(_ac_online_path) as f:
+                        ac = f.read().strip() == "1"
+                except OSError:
+                    pass
+    if _bat_capacity_path:
+        try:
+            with open(_bat_capacity_path) as f:
+                capacity = int(f.read().strip())
+        except (OSError, ValueError):
+            _discover_power_paths()
+            if _bat_capacity_path:
+                try:
+                    with open(_bat_capacity_path) as f:
+                        capacity = int(f.read().strip())
+                except (OSError, ValueError):
+                    pass
     return ac, capacity
-
-
-def z13_profile():
-    """Current profile label as reported by z13ctl (or ''). Lightweight."""
-    try:
-        return subprocess.run(
-            ["z13ctl", "profile", "--get"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return ""
-
-
-def z13_tdp_pl1():
-    """Current PL1 in watts, or None if unread."""
-    try:
-        r = subprocess.run(
-            ["z13ctl", "tdp", "--get"],
-            capture_output=True, text=True, timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    for line in r.stdout.splitlines():
-        if "PL1" not in line:
-            continue
-        for token in line.replace("=", " ").replace(":", " ").split():
-            token = token.strip("Ww,")
-            if token.isdigit():
-                return int(token)
-    return None
 
 
 def run_diagnose():
@@ -403,7 +413,7 @@ def notify(summary, body):
         subprocess.run(
             ["notify-send", "-a", "z13-power", "-i", "preferences-system-power",
              "-u", "normal", "-t", "3000", summary, body],
-            capture_output=True, timeout=5,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
         pass
@@ -435,7 +445,19 @@ def apply_saved_lighting():
     z13ctl(args)
 
 
-def load_config():
+_cfg_mtime = None
+_cfg_cached = None
+
+
+def load_config(force=False):
+    """Parse service.conf; reuse the last parse while mtime is unchanged."""
+    global _cfg_mtime, _cfg_cached
+    try:
+        mtime = os.path.getmtime(CONFIG_PATH)
+    except OSError:
+        mtime = None
+    if not force and _cfg_cached is not None and mtime == _cfg_mtime:
+        return _cfg_cached
     cfg = configparser.ConfigParser()
     cfg.read(CONFIG_PATH)
     out = {"low_battery": 15, "on_ac": "performance",
@@ -466,6 +488,8 @@ def load_config():
         if mode_def["profile"] not in ("quiet", "balanced", "performance"):
             mode_def["profile"] = DEFAULT_MODES[name]["profile"]
         out["modes"][name] = mode_def
+    _cfg_mtime = mtime
+    _cfg_cached = out
     return out
 
 
@@ -480,10 +504,15 @@ def ensure_config():
 
 _TILE_BG = "#15151a"
 _TILE_BORDER = "#33333d"
+_pixmap_cache = {}
 
 
 def make_pixmap(color):
     """ROG-style tray tile: dark tile + angular power bolt, tinted per mode."""
+    key = (color, _TILE_BG, _TILE_BORDER)
+    cached = _pixmap_cache.get(key)
+    if cached is not None:
+        return cached
     pm = QPixmap(64, 64)
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
@@ -499,6 +528,7 @@ def make_pixmap(color):
     ])
     p.drawPolygon(bolt)
     p.end()
+    _pixmap_cache[key] = pm
     return pm
 
 
@@ -955,9 +985,13 @@ class Service:
         self.last_ac = ac
         self.ac_probe = ac
         self.ac_probe_count = 0
-        self.last_profile = z13_profile()
+        self.last_fw_profile = firmware_profile()
+        self.last_profile = self.last_fw_profile
         self._last_applied = None
         self._last_notified = None
+        self._status_payload = None
+        self._tray_color = None
+        self._tray_tip = None
 
         # Classic Qt tray — used on KDE Plasma and X11, and as the fallback if
         # the SNI item below fails to register (a silent failure must never
@@ -1039,12 +1073,12 @@ class Service:
         self.monitor.event.connect(self.on_power_event)
         self.monitor.start()
 
-        # 5s: notify on externally-changed profile (single cheap z13ctl call)
+        # Sysfs poll for firmware profile changes made outside this service.
         self.poll_timer = QTimer()
         self.poll_timer.timeout.connect(self.on_poll)
-        self.poll_timer.start(5000)
+        self.poll_timer.start(8000)
 
-        # 30s: safety re-evaluation + config reload in case udev missed an event
+        # Safety re-evaluation if udev missed an AC event.
         self.power_timer = QTimer()
         self.power_timer.timeout.connect(self.evaluate_power)
         self.power_timer.start(30000)
@@ -1056,6 +1090,15 @@ class Service:
             self._cmd_watcher.addPath(COMMAND_PATH)
         self._cmd_watcher.directoryChanged.connect(self._on_command_path)
         self._cmd_watcher.fileChanged.connect(self._on_command_path)
+
+        self._cfg_watcher = QFileSystemWatcher(app)
+        cfg_dir = os.path.dirname(CONFIG_PATH)
+        if os.path.isdir(cfg_dir):
+            self._cfg_watcher.addPath(cfg_dir)
+        if os.path.exists(CONFIG_PATH):
+            self._cfg_watcher.addPath(CONFIG_PATH)
+        self._cfg_watcher.fileChanged.connect(self._on_config_changed)
+        self._cfg_watcher.directoryChanged.connect(self._on_config_changed)
 
     def start(self):
         self.evaluate_power()
@@ -1071,7 +1114,7 @@ class Service:
             self._sni_grace_timer.start(15000)
         else:
             self.tray.show()
-        self.startup_diagnose()
+        QTimer.singleShot(20000, self.startup_diagnose)
 
     def on_sni_registered(self):
         """The SNI item is live — keep the Qt fallback tray hidden."""
@@ -1124,12 +1167,18 @@ class Service:
             self.show_menu()
 
     def apply_theme(self, theme):
-        global MODE_COLORS, _TILE_BG, _TILE_BORDER
+        global MODE_COLORS, _TILE_BG, _TILE_BORDER, _pixmap_cache
         self._theme = theme
         MODE_COLORS = self._theme_mod.mode_colors(theme)
         _TILE_BG = theme.get("dark_background", _TILE_BG)
         _TILE_BORDER = theme.get("muted", _TILE_BORDER)
-        self._theme_mod.apply_to_app(self.app, theme)
+        _pixmap_cache.clear()
+        self._tray_color = None
+        self._tray_tip = None
+        if hasattr(self._theme_mod, "apply_to_tray"):
+            self._theme_mod.apply_to_tray(self.app, theme)
+        else:
+            self._theme_mod.apply_to_app(self.app, theme)
         if self.themed_menu is None:
             self.themed_menu = self._theme_mod.ThemedMenu()
             self._theme_mod.install_click_away(self.themed_menu, self.app)
@@ -1290,7 +1339,8 @@ class Service:
         if not apply_mode(mode_def):
             notify("Power profile error", f"Failed to apply '{mode}'")
             return False
-        self.last_profile = z13_profile()
+        self.last_fw_profile = firmware_profile()
+        self.last_profile = self.last_fw_profile or mode_def.get("profile", "")
         self._last_applied = mode
         self.update_menu_checks()
         self.update_tray()
@@ -1328,14 +1378,28 @@ class Service:
         state = "automatic" if self.automatic else ("locked" if self.locked else "manual")
         label = MODES.get(mode, mode)
         self.write_status(mode)
-        if self.sni is not None:
-            self.sni.set_icon(make_pixmap(color))
-            self.sni.set_tooltip(f"z13-power: {label} ({state})")
-            return
-        self.tray.setIcon(make_icon(color))
-        self.tray.setToolTip(f"z13-power: {label} ({state})")
-        if not self.tray.isVisible():
+        if color != self._tray_color:
+            self._tray_color = color
+            if self.sni is not None:
+                self.sni.set_icon(make_pixmap(color))
+            else:
+                self.tray.setIcon(make_icon(color))
+        tip = f"z13-power: {label} ({state})"
+        if tip != self._tray_tip:
+            self._tray_tip = tip
+            if self.sni is not None:
+                self.sni.set_tooltip(tip)
+            else:
+                self.tray.setToolTip(tip)
+        if self.sni is None and not self.tray.isVisible():
             self.tray.show()
+
+    def _mode_pl1(self, mode):
+        mode_def = self.cfg["modes"].get(mode) or DEFAULT_MODES.get(mode) or {}
+        parts = str(mode_def.get("tdp", "")).split()
+        if parts and parts[0].lstrip("-").isdigit():
+            return int(parts[0])
+        return None
 
     def write_status(self, mode=None):
         mode = mode or (self.manual_mode if not self.automatic else (self._last_applied or "performance"))
@@ -1347,9 +1411,12 @@ class Service:
             "locked": bool(self.locked),
             "ac": bool(ac),
             "capacity": capacity,
-            "tdp": z13_tdp_pl1(),
-            "profile": self.last_profile or z13_profile() or "",
+            "tdp": self._mode_pl1(mode),
+            "profile": self.last_profile or self.last_fw_profile or "",
         }
+        if payload == self._status_payload:
+            return
+        self._status_payload = payload
         try:
             os.makedirs(STATE_DIR, exist_ok=True)
             tmp = STATUS_PATH + ".tmp"
@@ -1358,6 +1425,12 @@ class Service:
             os.replace(tmp, STATUS_PATH)
         except OSError:
             pass
+
+    def _on_config_changed(self, _path=""):
+        if os.path.exists(CONFIG_PATH) and CONFIG_PATH not in self._cfg_watcher.files():
+            self._cfg_watcher.addPath(CONFIG_PATH)
+        self.cfg = load_config(force=True)
+        self.evaluate_power()
 
     def _on_command_path(self, _path=""):
         if os.path.exists(COMMAND_PATH) and COMMAND_PATH not in self._cmd_watcher.files():
@@ -1406,21 +1479,28 @@ class Service:
         box.exec()
 
     def on_poll(self):
-        profile = z13_profile()
-        if not profile:
+        fw = firmware_profile()
+        if not fw or fw == self.last_fw_profile:
             return
-        if profile != self.last_profile:
-            # Changed by something outside the service (overlay, terminal, button).
-            self.last_profile = profile
-            if not self.locked:
-                self.automatic = False
-                if self.sni is not None:
-                    self.sni.set_state(self.automatic, self.manual_mode, self.locked)
-                else:
-                    self.lock_action.setEnabled(True)
-            self.update_menu_checks()
-            self.update_tray()
-            notify("Power profile changed", f"Now: {profile} (set externally)")
+        expected = None
+        if self._last_applied:
+            mode_def = self.cfg["modes"].get(self._last_applied) or DEFAULT_MODES.get(self._last_applied)
+            if mode_def:
+                expected = mode_def.get("profile")
+        self.last_fw_profile = fw
+        if expected and fw == expected:
+            return
+        # Firmware profile changed outside this service (overlay, terminal, button).
+        self.last_profile = fw
+        if not self.locked:
+            self.automatic = False
+            if self.sni is not None:
+                self.sni.set_state(self.automatic, self.manual_mode, self.locked)
+            else:
+                self.lock_action.setEnabled(True)
+        self.update_menu_checks()
+        self.update_tray()
+        notify("Power profile changed", f"Now: {fw} (set externally)")
 
 
 def main():
@@ -1431,7 +1511,10 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     try:
         theme = _theme_mod()
-        theme.apply_to_app(app)
+        if hasattr(theme, "apply_to_tray"):
+            theme.apply_to_tray(app)
+        else:
+            app.setStyle("Fusion")
     except Exception:
         pass
     service = Service(app)

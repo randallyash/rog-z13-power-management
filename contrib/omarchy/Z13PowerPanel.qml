@@ -120,13 +120,7 @@ Column {
   }
 
   Component.onCompleted: statusFile.reload()
-
-  Timer {
-    interval: 2000
-    repeat: true
-    running: root.visible
-    onTriggered: statusFile.reload()
-  }
+  onVisibleChanged: if (visible) statusFile.reload()
 
   Process {
     id: cmdProc

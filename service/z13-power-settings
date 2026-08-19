@@ -26,7 +26,7 @@ import re
 import subprocess
 import sys
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QFileSystemWatcher
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QApplication, QColorDialog, QFrame, QGridLayout,
                              QHBoxLayout, QLabel, QMainWindow, QScrollArea,
@@ -448,7 +448,12 @@ class FanTab(QWidget):
         self.msg = T.StatusLine(theme)
         v.addWidget(self.msg)
         v.addStretch(1)
-        self.fetch()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_loaded", False):
+            self._loaded = True
+            self.fetch()
 
     def fetch(self):
         points, mode = fan_curve()
@@ -535,7 +540,12 @@ class BatteryTab(QWidget):
         self.msg = T.StatusLine(theme)
         v.addWidget(self.msg)
         v.addStretch(1)
-        self.refresh()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_loaded", False):
+            self._loaded = True
+            self.refresh()
 
     def refresh(self):
         r = z13ctl(["batterylimit", "--get"])
@@ -585,7 +595,12 @@ class PowerTab(QWidget):
         self.msg = T.StatusLine(theme)
         v.addWidget(self.msg)
         v.addStretch(1)
-        self.refresh()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_loaded", False):
+            self._loaded = True
+            self.refresh()
 
     def refresh(self):
         r = z13ctl(["paneloverdrive", "--get"])
@@ -634,8 +649,15 @@ class TelemetryTab(QWidget):
         v.addStretch(1)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
-        self.timer.start(2000)
+
+    def showEvent(self, event):
+        super().showEvent(event)
         self.refresh()
+        self.timer.start(3000)
+
+    def hideEvent(self, event):
+        self.timer.stop()
+        super().hideEvent(event)
 
     def refresh(self):
         st = z13_status()
@@ -797,9 +819,19 @@ class SettingsWindow(QMainWindow):
 
         self.setCentralWidget(root)
         self._refresh_hero()
-        self.hero_timer = QTimer(self)
-        self.hero_timer.timeout.connect(self._refresh_hero)
-        self.hero_timer.start(2000)
+        self._status_watch = QFileSystemWatcher(self)
+        state_dir = os.path.dirname(STATUS_PATH)
+        if os.path.isdir(state_dir):
+            self._status_watch.addPath(state_dir)
+        if os.path.exists(STATUS_PATH):
+            self._status_watch.addPath(STATUS_PATH)
+        self._status_watch.fileChanged.connect(self._on_status_changed)
+        self._status_watch.directoryChanged.connect(self._on_status_changed)
+
+    def _on_status_changed(self, _path=""):
+        if os.path.exists(STATUS_PATH) and STATUS_PATH not in self._status_watch.files():
+            self._status_watch.addPath(STATUS_PATH)
+        self._refresh_hero()
 
     def _scroll(self, widget):
         area = QScrollArea()

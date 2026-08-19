@@ -129,31 +129,45 @@ def _alpha(hex_color, alpha):
     return color.name(QColor.NameFormat.HexArgb)
 
 
+_font_cache = None
+_radius_cache = None
+
+
 def detect_font():
     """Same source `omarchy font current` uses: fontconfig monospace."""
+    global _font_cache
+    if _font_cache:
+        return _font_cache
     try:
         out = subprocess.check_output(
             ["fc-match", "monospace", "-f", "%{family}\\n"],
             text=True, timeout=2)
         name = out.splitlines()[0].split(",")[0].strip()
         if name:
+            _font_cache = name
             return name
     except (OSError, subprocess.SubprocessError):
         pass
-    return "JetBrainsMono Nerd Font"
+    _font_cache = "JetBrainsMono Nerd Font"
+    return _font_cache
 
 
 def detect_radius():
     """Hyprland `decoration:rounding` — 0 on sharp Omarchy themes."""
+    global _radius_cache
+    if _radius_cache is not None:
+        return _radius_cache
     try:
         import json
         out = subprocess.check_output(
             ["hyprctl", "-j", "getoption", "decoration:rounding"],
             text=True, timeout=1)
         value = int(json.loads(out).get("int", 0))
-        return max(0, value)
+        _radius_cache = max(0, value)
+        return _radius_cache
     except (OSError, subprocess.SubprocessError, ValueError, TypeError):
-        return 12
+        _radius_cache = 12
+        return _radius_cache
 
 
 def load_theme():
@@ -434,6 +448,18 @@ def apply_to_app(app=None, theme=None):
     application.setStyleSheet(stylesheet(t))
     font = QFont(t["font"], t["font_size"])
     application.setFont(font)
+    return t
+
+
+def apply_to_tray(app=None, theme=None):
+    """Fusion + font for the windowless tray. Skip the settings QSS."""
+    application = app or QApplication.instance()
+    t = theme or load_theme()
+    if application is None:
+        return t
+    application.setStyle("Fusion")
+    application.setStyleSheet("")
+    application.setFont(QFont(t["font"], t["font_size"]))
     return t
 
 
