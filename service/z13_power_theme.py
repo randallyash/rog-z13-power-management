@@ -15,17 +15,20 @@ import os
 import re
 import subprocess
 
-from PyQt6.QtCore import QObject, QPoint, Qt, QFileSystemWatcher, pyqtSignal
+from PyQt6.QtCore import (
+    QObject, QPoint, QRectF, Qt, QFileSystemWatcher, pyqtSignal,
+)
 from PyQt6.QtGui import (
     QColor, QCursor, QFont, QGuiApplication, QPainter, QPen,
 )
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QStyle, QStyleOption,
-    QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QSizePolicy, QStyle, QStyleOption, QVBoxLayout, QWidget,
 )
 
-THEME_DIR = os.path.expanduser("~/.local/state/omarchy/current/theme")
-THEME_NAME = os.path.expanduser("~/.local/state/omarchy/current/theme.name")
+CURRENT_DIR = os.path.expanduser("~/.local/state/omarchy/current")
+THEME_DIR = os.path.join(CURRENT_DIR, "theme")
+THEME_NAME = os.path.join(CURRENT_DIR, "theme.name")
 COLORS_PATH = os.path.join(THEME_DIR, "colors.toml")
 SHELL_PATH = os.path.join(THEME_DIR, "shell.toml")
 
@@ -58,12 +61,16 @@ MODE_GLYPHS = {
     "lowpower": "\U000f0331",     # nf-md-leaf
 }
 
-_KV = re.compile(r'^([A-Za-z0-9_.-]+)\s*=\s*"([^"]*)"\s*$')
-_NUM = re.compile(r"^([A-Za-z0-9_.-]+)\s*=\s*([0-9.]+)\s*$")
+# Omarchy colors.toml / shell.toml use unquoted hex (`accent = #faa968`) as
+# well as quoted strings. A naive split-on-# would eat every color.
+_KV = re.compile(
+    r'^([A-Za-z0-9_.-]+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|(\S.*?))\s*$'
+)
+_COMMENT = re.compile(r"\s+#(?![0-9A-Fa-f]{3,8}\b).*$")
 
 
 def _parse_simple(path):
-    """Parse the subset of TOML Omarchy ships (flat keys, quoted strings)."""
+    """Parse the subset of TOML Omarchy ships (flat keys, quoted or bare)."""
     out = {}
     section = ""
     try:
@@ -72,24 +79,47 @@ def _parse_simple(path):
     except OSError:
         return out
     for raw in lines:
-        line = raw.split("#", 1)[0].strip()
-        if not line:
+        line = _COMMENT.sub("", raw).strip()
+        if not line or line.startswith("#"):
             continue
         if line.startswith("[") and line.endswith("]"):
             section = line[1:-1].strip()
             continue
-        m = _KV.match(line) or _NUM.match(line)
+        m = _KV.match(line)
         if not m:
             continue
+        value = m.group(2) if m.group(2) is not None else (
+            m.group(3) if m.group(3) is not None else m.group(4))
         key = f"{section}.{m.group(1)}" if section else m.group(1)
-        out[key] = m.group(2)
+        out[key] = value
     return out
 
 
 def _hex(value, fallback):
-    text = str(value or "").strip()
+    text = str(value or "").strip().strip("\"'")
     if text.startswith("#") and len(text) in (4, 7, 9):
         return text
+    return fallback
+
+
+def _token_hex(raw, shell, colors, fallback):
+    """Resolve a shell.toml color: hex, palette role, or hyprland.* alias."""
+    text = str(raw or "").strip().strip("\"'")
+    if not text:
+        return fallback
+    if text.startswith("#"):
+        return _hex(text, fallback)
+    role = text.lower()
+    if role in ("foreground", "text"):
+        return _hex(colors.get("foreground"), fallback)
+    if role == "accent":
+        return _hex(colors.get("accent") or colors.get("blue"), fallback)
+    if role == "background":
+        return _hex(colors.get("background"), fallback)
+    if role == "muted":
+        return _hex(colors.get("muted") or colors.get("dark_foreground"), fallback)
+    if text.startswith("hyprland."):
+        return _token_hex(shell.get(text), shell, colors, fallback)
     return fallback
 
 
@@ -99,18 +129,45 @@ def _alpha(hex_color, alpha):
     return color.name(QColor.NameFormat.HexArgb)
 
 
+_font_cache = None
+_radius_cache = None
+
+
 def detect_font():
     """Same source `omarchy font current` uses: fontconfig monospace."""
+    global _font_cache
+    if _font_cache:
+        return _font_cache
     try:
         out = subprocess.check_output(
             ["fc-match", "monospace", "-f", "%{family}\\n"],
             text=True, timeout=2)
         name = out.splitlines()[0].split(",")[0].strip()
         if name:
+            _font_cache = name
             return name
     except (OSError, subprocess.SubprocessError):
         pass
-    return "JetBrainsMono Nerd Font"
+    _font_cache = "JetBrainsMono Nerd Font"
+    return _font_cache
+
+
+def detect_radius():
+    """Hyprland `decoration:rounding` — 0 on sharp Omarchy themes."""
+    global _radius_cache
+    if _radius_cache is not None:
+        return _radius_cache
+    try:
+        import json
+        out = subprocess.check_output(
+            ["hyprctl", "-j", "getoption", "decoration:rounding"],
+            text=True, timeout=1)
+        value = int(json.loads(out).get("int", 0))
+        _radius_cache = max(0, value)
+        return _radius_cache
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        _radius_cache = 12
+        return _radius_cache
 
 
 def load_theme():
@@ -126,15 +183,11 @@ def load_theme():
     hover_bg = _hex(colors.get("selection") or colors.get("lighter_background"),
                     FALLBACK["selection"])
 
-    menu_bg = _hex(shell.get("menu.background"), bg)
-    menu_fg = _hex(shell.get("menu.text"), fg)
-    menu_border = _hex(shell.get("menu.border")
-                       if str(shell.get("menu.border", "")).startswith("#")
-                       else None, fg)
-    menu_sel_bg = _hex(
-        shell.get("menu.selected-background")
-        if str(shell.get("menu.selected-background", "")).startswith("#")
-        else None, fg)
+    menu_bg = _token_hex(shell.get("menu.background"), shell, colors, bg)
+    menu_fg = _token_hex(shell.get("menu.text"), shell, colors, fg)
+    menu_border = _token_hex(shell.get("menu.border"), shell, colors, fg)
+    menu_sel_bg = _token_hex(shell.get("menu.selected-background"),
+                             shell, colors, fg)
     try:
         sel_a = float(shell.get("menu.selected-background-alpha", "0.08"))
     except ValueError:
@@ -143,12 +196,28 @@ def load_theme():
         border_a = float(shell.get("menu.border-alpha", "1.0"))
     except ValueError:
         border_a = 1.0
-    menu_sel_text = _hex(shell.get("menu.selected-text"), accent)
+    menu_sel_text = _token_hex(shell.get("menu.selected-text"), shell, colors,
+                               accent)
 
     try:
         base = int(float(shell.get("font.base-size", "12")))
     except ValueError:
         base = 12
+
+    def _shell_float(key, default):
+        try:
+            return float(shell.get(key, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    fill_a = _shell_float("controls.normal-fill-alpha", 0.04)
+    hover_a = _shell_float("controls.hover-cursor-fill-alpha", 0.08)
+    selected_a = _shell_float("controls.selected-fill-alpha", 0.18)
+    border_fill_a = _shell_float("controls.normal-border-alpha", 0.4)
+    hover_border_a = _shell_float("controls.hover-cursor-border-alpha", 0.25)
+
+    popup_bg = _token_hex(shell.get("popups.background"), shell, colors, bg)
+    popup_fg = _token_hex(shell.get("popups.text"), shell, colors, fg)
 
     return {
         "mode": colors.get("mode", "dark"),
@@ -172,9 +241,19 @@ def load_theme():
         "menu_border": _alpha(menu_border, border_a),
         "menu_sel_bg": _alpha(menu_sel_bg, sel_a),
         "menu_sel_text": menu_sel_text,
+        "popup_bg": popup_bg,
+        "popup_fg": popup_fg,
+        "control_fill": _alpha(fg, fill_a),
+        "control_fill_hover": _alpha(fg, hover_a),
+        "control_fill_selected": _alpha(fg, selected_a),
+        "control_border": _alpha(fg, border_fill_a),
+        "control_border_hover": _alpha(fg, hover_border_a),
         "font": detect_font(),
         "font_size": max(10, base),
-        "radius": 12,
+        "caption_size": max(9, base - 2),
+        "title_size": max(12, base + 2),
+        "display_size": max(18, base * 2),
+        "radius": detect_radius(),
     }
 
 
@@ -194,96 +273,106 @@ def stylesheet(theme=None):
     t = theme or load_theme()
     font = t["font"]
     size = t["font_size"]
+    radius = min(int(t["radius"]), 8)
+    knob = 7 if t["radius"] > 0 else 0
+    groove = 3 if t["radius"] > 0 else 0
     return f"""
     * {{
         font-family: "{font}";
         font-size: {size}px;
-        color: {t["menu_fg"]};
+        color: {t["popup_fg"]};
+    }}
+    QMainWindow, QDialog, QMessageBox, QStackedWidget, QScrollArea {{
+        background-color: {t["popup_bg"]};
+        color: {t["popup_fg"]};
     }}
     QWidget {{
-        background-color: {t["menu_bg"]};
-        color: {t["menu_fg"]};
+        color: {t["popup_fg"]};
         selection-background-color: {t["menu_sel_bg"]};
         selection-color: {t["menu_sel_text"]};
     }}
-    QMainWindow, QDialog, QMessageBox {{
-        background-color: {t["background"]};
-        color: {t["foreground"]};
-    }}
     QTabWidget::pane {{
-        border: 1px solid {t["muted"]};
-        background: {t["background"]};
+        border: 1px solid {t["control_border"]};
+        background: {t["popup_bg"]};
         top: -1px;
     }}
     QTabBar::tab {{
-        background: {t["dark_background"]};
-        color: {t["menu_fg"]};
+        background: {t["control_fill"]};
+        color: {t["popup_fg"]};
         padding: 7px 14px;
-        border: 1px solid {t["muted"]};
+        border: 1px solid {t["control_border"]};
         border-bottom: none;
         margin-right: 2px;
     }}
     QTabBar::tab:selected {{
-        background: {t["background"]};
+        background: {t["control_fill_selected"]};
         color: {t["accent"]};
     }}
     QTabBar::tab:hover {{
+        background: {t["control_fill_hover"]};
         color: {t["accent"]};
     }}
     QPushButton {{
-        background: {t["lighter_background"]};
+        background: {t["control_fill"]};
         color: {t["foreground"]};
-        border: 1px solid {t["muted"]};
-        border-radius: 6px;
+        border: 1px solid {t["control_border"]};
+        border-radius: {radius}px;
         padding: 6px 12px;
+        min-height: 28px;
     }}
     QPushButton:hover {{
-        background: {t["hover"]};
-        color: {t["accent"]};
-        border-color: {t["accent"]};
+        background: {t["control_fill_hover"]};
+        border-color: {t["control_border_hover"]};
     }}
     QPushButton:pressed {{
-        background: {t["hover"]};
+        background: {t["control_fill_selected"]};
     }}
     QPushButton:checked {{
-        background: {t["hover"]};
+        background: {t["control_fill_selected"]};
         color: {t["accent"]};
-        border-color: {t["accent"]};
+        border-color: {t["control_border_hover"]};
     }}
-    QComboBox, QSpinBox, QLineEdit {{
-        background: {t["dark_background"]};
+    QComboBox, QSpinBox, QAbstractSpinBox, QLineEdit {{
+        background: {t["control_fill"]};
         color: {t["foreground"]};
-        border: 1px solid {t["muted"]};
-        border-radius: 6px;
+        border: 1px solid {t["control_border"]};
+        border-radius: {radius}px;
         padding: 4px 8px;
+        min-height: 28px;
     }}
-    QComboBox:hover, QSpinBox:hover, QLineEdit:hover {{
-        border-color: {t["accent"]};
+    QComboBox:hover, QSpinBox:hover, QAbstractSpinBox:hover, QLineEdit:hover {{
+        background: {t["control_fill_hover"]};
+        border-color: {t["control_border_hover"]};
     }}
     QComboBox QAbstractItemView {{
         background: {t["menu_bg"]};
         color: {t["menu_fg"]};
         selection-background-color: {t["menu_sel_bg"]};
         selection-color: {t["menu_sel_text"]};
-        border: 1px solid {t["muted"]};
+        border: 1px solid {t["menu_border"]};
+        outline: none;
     }}
     QSlider::groove:horizontal {{
         height: 6px;
-        background: {t["lighter_background"]};
-        border-radius: 3px;
+        background: {t["control_fill_selected"]};
+        border-radius: {groove}px;
+    }}
+    QSlider::sub-page:horizontal {{
+        background: {t["foreground"]};
+        border-radius: {groove}px;
     }}
     QSlider::handle:horizontal {{
-        background: {t["accent"]};
+        background: {t["foreground"]};
         width: 14px;
         margin: -5px 0;
-        border-radius: 7px;
+        border-radius: {knob}px;
     }}
     QCheckBox::indicator {{
         width: 14px;
         height: 14px;
-        border: 1px solid {t["muted"]};
-        border-radius: 3px;
-        background: {t["dark_background"]};
+        border: 1px solid {t["control_border"]};
+        border-radius: {min(radius, 3)}px;
+        background: {t["control_fill"]};
     }}
     QCheckBox::indicator:checked {{
         background: {t["accent"]};
@@ -292,11 +381,17 @@ def stylesheet(theme=None):
     QLabel {{
         background: transparent;
     }}
+    QToolTip {{
+        background: {t["popup_bg"]};
+        color: {t["popup_fg"]};
+        border: 1px solid {t["menu_border"]};
+        padding: 4px 8px;
+    }}
     QMenu {{
         background: {t["menu_bg"]};
         color: {t["menu_fg"]};
         border: 1px solid {t["menu_border"]};
-        border-radius: 8px;
+        border-radius: {min(int(t["radius"]), 8)}px;
         padding: 6px;
     }}
     QMenu::item {{
@@ -327,10 +422,17 @@ def stylesheet(theme=None):
         border-radius: 4px;
         min-height: 24px;
     }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+        height: 0;
+    }}
     QMessageBox {{
-        background: {t["background"]};
+        background: {t["popup_bg"]};
     }}
     QMessageBox QLabel {{
+        color: {t["foreground"]};
+    }}
+    QColorDialog {{
+        background: {t["popup_bg"]};
         color: {t["foreground"]};
     }}
     """
@@ -349,6 +451,18 @@ def apply_to_app(app=None, theme=None):
     return t
 
 
+def apply_to_tray(app=None, theme=None):
+    """Fusion + font for the windowless tray. Skip the settings QSS."""
+    application = app or QApplication.instance()
+    t = theme or load_theme()
+    if application is None:
+        return t
+    application.setStyle("Fusion")
+    application.setStyleSheet("")
+    application.setFont(QFont(t["font"], t["font_size"]))
+    return t
+
+
 class ThemeWatcher(QObject):
     """Re-emits when the Omarchy theme files change."""
 
@@ -363,9 +477,14 @@ class ThemeWatcher(QObject):
         self._watcher.directoryChanged.connect(self._on_change)
 
     def _watch(self):
-        paths = [THEME_DIR, THEME_NAME, COLORS_PATH, SHELL_PATH]
+        # omarchy-theme-set rm -rf's `theme/` and mv's a new tree in. Watch
+        # the parent `current/` dir so the swap always produces an event,
+        # then re-arm file watches after the new tree exists.
+        paths = [CURRENT_DIR, THEME_DIR, THEME_NAME, COLORS_PATH, SHELL_PATH]
         existing = [p for p in paths if os.path.exists(p)]
         current = set(self._watcher.files()) | set(self._watcher.directories())
+        for stale in current - set(existing):
+            self._watcher.removePath(stale)
         for path in existing:
             if path not in current:
                 self._watcher.addPath(path)
@@ -378,7 +497,7 @@ class ThemeWatcher(QObject):
             self._timer = QTimer(self)
             self._timer.setSingleShot(True)
             self._timer.timeout.connect(self.changed.emit)
-        self._timer.start(120)
+        self._timer.start(250)
 
 
 class _MenuRow(QWidget):
@@ -596,3 +715,396 @@ def install_click_away(menu, app=None):
         application.installEventFilter(filt)
     menu._click_away = filt
     return filt
+
+
+def _apply_children(widget, theme):
+    for child in widget.findChildren(QWidget):
+        apply = getattr(child, "apply_theme", None)
+        if callable(apply):
+            apply(theme)
+
+
+class SectionHeader(QLabel):
+    """Small-caps section label matching Omarchy PanelSectionHeader."""
+
+    def __init__(self, text, theme, parent=None):
+        super().__init__(text, parent)
+        self._theme = theme
+        self.apply_theme(theme)
+
+    def apply_theme(self, theme):
+        self._theme = theme
+        color = QColor(theme["foreground"]).darker(140).name()
+        self.setStyleSheet(
+            f"color: {color}; background: transparent;"
+            f" font-size: {theme['caption_size']}px; font-weight: 700;"
+            f" letter-spacing: 1px; padding-top: 2px;"
+        )
+
+
+class Note(QLabel):
+    def __init__(self, text, theme, parent=None):
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+        self.apply_theme(theme)
+
+    def apply_theme(self, theme):
+        color = QColor(theme["foreground"]).darker(150).name()
+        self.setStyleSheet(
+            f"color: {color}; background: transparent;"
+            f" font-size: {theme['caption_size']}px;"
+        )
+
+
+class StatusLine(QLabel):
+    def __init__(self, theme, parent=None):
+        super().__init__(parent)
+        self._theme = theme
+        self.setWordWrap(True)
+        self.apply_theme(theme)
+
+    def apply_theme(self, theme):
+        self._theme = theme
+        self.setStyleSheet(
+            f"color: {theme['foreground']}; background: transparent;"
+        )
+
+    def set_info(self, text):
+        self.setStyleSheet(
+            f"color: {self._theme['foreground']}; background: transparent;"
+        )
+        self.setText(text)
+
+    def set_result(self, ok, text):
+        color = self._theme["green"] if ok else self._theme["red"]
+        self.setStyleSheet(f"color: {color}; background: transparent;")
+        self.setText(text)
+
+
+class HLine(QFrame):
+    def __init__(self, theme, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setFixedHeight(1)
+        self.apply_theme(theme)
+
+    def apply_theme(self, theme):
+        self.setStyleSheet(f"background: {theme['control_border']};")
+
+
+class Hero(QWidget):
+    """Bolt + title + uppercase meta, same shape as the tray flyout hero."""
+
+    def __init__(self, glyph, title, meta, theme, parent=None):
+        super().__init__(parent)
+        self._glyph = QLabel(glyph)
+        self._title = QLabel(title)
+        self._meta = QLabel(meta.upper())
+        self._detail = QLabel("")
+        labels = QVBoxLayout()
+        labels.setContentsMargins(0, 0, 0, 0)
+        labels.setSpacing(2)
+        labels.addWidget(self._title)
+        labels.addWidget(self._meta)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(14)
+        row.addWidget(self._glyph)
+        row.addLayout(labels, 1)
+        row.addWidget(self._detail, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.apply_theme(theme)
+
+    def set_meta(self, text):
+        self._meta.setText(str(text or "").upper())
+
+    def set_detail(self, text):
+        self._detail.setText(str(text or ""))
+        self._detail.setVisible(bool(text))
+
+    def apply_theme(self, theme):
+        muted = QColor(theme["foreground"]).darker(140).name()
+        self._glyph.setStyleSheet(
+            f"color: {theme['foreground']}; background: transparent;"
+            f" font-size: {theme['display_size']}px;"
+        )
+        self._title.setStyleSheet(
+            f"color: {theme['foreground']}; background: transparent;"
+            f" font-size: {theme['title_size']}px; font-weight: 700;"
+        )
+        self._meta.setStyleSheet(
+            f"color: {muted}; background: transparent;"
+            f" font-size: {theme['caption_size']}px; font-weight: 700;"
+            f" letter-spacing: 1px;"
+        )
+        self._detail.setStyleSheet(
+            f"color: {theme['foreground']}; background: transparent;"
+            f" font-size: {theme['display_size']}px; font-weight: 700;"
+        )
+
+
+class Pill(QPushButton):
+    """Bordered control matching Omarchy Button { bordered: true }."""
+
+    def __init__(self, text, theme, parent=None, glyph=""):
+        super().__init__(parent)
+        self._plain = text
+        self._glyph = glyph
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCheckable(True)
+        self.setAutoExclusive(False)
+        self.setText((glyph + "  " if glyph else "") + text)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.apply_theme(theme)
+
+    def apply_theme(self, theme):
+        radius = min(int(theme["radius"]), 8)
+        self.setStyleSheet(
+            f"QPushButton {{"
+            f" background: {theme['control_fill']};"
+            f" color: {theme['foreground']};"
+            f" border: 1px solid {theme['control_border']};"
+            f" border-radius: {radius}px;"
+            f" padding: 6px 10px;"
+            f" min-height: 28px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f" background: {theme['control_fill_hover']};"
+            f" border-color: {theme['control_border_hover']};"
+            f"}}"
+            f"QPushButton:checked {{"
+            f" background: {theme['control_fill_selected']};"
+            f" color: {theme['accent']};"
+            f" border-color: {theme['control_border_hover']};"
+            f" font-weight: 700;"
+            f"}}"
+        )
+
+
+class PillRow(QWidget):
+    """Exclusive row of pills. options is [value] or [(value, label, glyph?)]."""
+
+    changed = pyqtSignal(str)
+
+    def __init__(self, options, theme, parent=None):
+        super().__init__(parent)
+        self._theme = theme
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._pills = {}
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        for option in options:
+            if isinstance(option, (tuple, list)):
+                value = option[0]
+                label = option[1] if len(option) > 1 else value
+                glyph = option[2] if len(option) > 2 else ""
+            else:
+                value, label, glyph = option, option, ""
+            pill = Pill(label, theme, self, glyph=glyph)
+            pill.clicked.connect(lambda _c=False, v=value: self.changed.emit(v))
+            self._group.addButton(pill)
+            self._pills[value] = pill
+            row.addWidget(pill, 1)
+
+    def value(self):
+        for value, pill in self._pills.items():
+            if pill.isChecked():
+                return value
+        return next(iter(self._pills), "")
+
+    def set_value(self, value):
+        if value in self._pills:
+            self._pills[value].setChecked(True)
+
+    def apply_theme(self, theme):
+        self._theme = theme
+        for pill in self._pills.values():
+            pill.apply_theme(theme)
+
+
+class ColorPill(QPushButton):
+    def __init__(self, hexval, theme, parent=None):
+        super().__init__(parent)
+        self.hexval = hexval.lstrip("#")
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(26, 26)
+        self.apply_theme(theme)
+
+    def set_hex(self, hexval):
+        self.hexval = hexval.lstrip("#")
+        self.apply_theme(self._theme)
+
+    def apply_theme(self, theme):
+        self._theme = theme
+        radius = min(int(theme["radius"]), 6)
+        color = f"#{self.hexval}"
+        self.setStyleSheet(
+            f"QPushButton {{"
+            f" background: {color};"
+            f" border: 2px solid {theme['control_border']};"
+            f" border-radius: {radius}px;"
+            f" padding: 0;"
+            f" min-width: 26px; max-width: 26px;"
+            f" min-height: 26px; max-height: 26px;"
+            f"}}"
+            f"QPushButton:checked {{"
+            f" border: 2px solid {theme['accent']};"
+            f"}}"
+        )
+
+
+class ToggleRow(QWidget):
+    """Labeled row + painted switch, matching Omarchy Toggle."""
+
+    clicked = pyqtSignal()
+
+    def __init__(self, label, description, theme, parent=None):
+        super().__init__(parent)
+        self._theme = theme
+        self._label = label
+        self._description = description
+        self._checked = False
+        self._hot = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(54)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def isChecked(self):
+        return self._checked
+
+    def setChecked(self, checked):
+        self._checked = bool(checked)
+        self.update()
+
+    def apply_theme(self, theme):
+        self._theme = theme
+        self.update()
+
+    def enterEvent(self, event):
+        self._hot = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hot = False
+        self.update()
+        super().leaveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        t = self._theme
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = min(int(t["radius"]), 8)
+        fill = t["control_fill_hover"] if self._hot else t["control_fill"]
+        border = t["control_border_hover"] if self._hot else t["control_border"]
+        painter.setPen(QPen(QColor(border), 1))
+        painter.setBrush(QColor(fill))
+        painter.drawRoundedRect(rect, radius, radius)
+
+        track_h = 20
+        track_w = 38
+        pad = 12
+        track = QRectF(self.width() - pad - track_w,
+                       (self.height() - track_h) / 2, track_w, track_h)
+        track_radius = track_h / 2 if t["radius"] > 0 else 0
+        if self._checked:
+            painter.setBrush(QColor(t["control_fill_selected"]))
+            painter.setPen(QPen(QColor(t["control_border_hover"]), 1))
+        else:
+            painter.setBrush(QColor(t["control_fill"]))
+            painter.setPen(QPen(QColor(t["control_border"]), 1))
+        painter.drawRoundedRect(track, track_radius, track_radius)
+
+        knob = 14
+        inset = (track_h - knob) / 2
+        kx = track.right() - inset - knob if self._checked else track.left() + inset
+        knob_rect = QRectF(kx, track.top() + inset, knob, knob)
+        knob_r = knob / 2 if t["radius"] > 0 else 0
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(t["accent"] if self._checked else t["muted"]))
+        painter.drawRoundedRect(knob_rect, knob_r, knob_r)
+
+        text_right = int(track.left() - 12)
+        title_font = QFont(t["font"], t["title_size"] - 1)
+        title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.setPen(QColor(t["foreground"]))
+        painter.drawText(QRectF(pad, 8, text_right - pad, 20),
+                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                         self._label)
+        if self._description:
+            cap = QFont(t["font"], t["caption_size"])
+            painter.setFont(cap)
+            painter.setPen(QColor(t["foreground"]).darker(150))
+            painter.drawText(QRectF(pad, 28, text_right - pad, 18),
+                             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                             self._description)
+        painter.end()
+
+
+class NavItem(QPushButton):
+    def __init__(self, glyph, label, theme, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setAutoExclusive(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setText(f"{glyph}   {label}")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.apply_theme(theme)
+
+    def apply_theme(self, theme):
+        radius = min(int(theme["radius"]), 8)
+        self.setStyleSheet(
+            f"QPushButton {{"
+            f" background: transparent;"
+            f" color: {theme['foreground']};"
+            f" border: 1px solid transparent;"
+            f" border-radius: {radius}px;"
+            f" padding: 8px 12px;"
+            f" text-align: left;"
+            f" min-height: 32px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f" background: {theme['control_fill_hover']};"
+            f"}}"
+            f"QPushButton:checked {{"
+            f" background: {theme['control_fill_selected']};"
+            f" color: {theme['accent']};"
+            f" font-weight: 700;"
+            f"}}"
+        )
+
+
+class InfoRow(QWidget):
+    def __init__(self, label, value, theme, parent=None):
+        super().__init__(parent)
+        self._label = QLabel(label)
+        self._value = QLabel(value)
+        self._value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 2, 0, 2)
+        row.setSpacing(8)
+        row.addWidget(self._label)
+        row.addWidget(self._value, 1)
+        self.apply_theme(theme)
+
+    def set_value(self, value):
+        self._value.setText(value)
+
+    def apply_theme(self, theme):
+        muted = QColor(theme["foreground"])
+        muted.setAlphaF(0.6)
+        self._label.setStyleSheet(
+            f"color: {muted.name(QColor.NameFormat.HexArgb)}; background: transparent;"
+        )
+        self._value.setStyleSheet(
+            f"color: {theme['foreground']}; background: transparent;"
+        )

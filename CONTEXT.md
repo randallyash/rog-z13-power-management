@@ -98,23 +98,23 @@ State: `automatic` (default), `manual_mode`, `locked`.
   `tdp_force` (adds `--force`), `fancurve` (`reset`/`auto` → `--reset`,
   else passed to `--set` as the 8-point string), `undervolt` (`reset` → `--reset`,
   else `--set <v>`, skipped without ryzen_smu). DEFAULT_MODES are the fallback.
-- **3s profile poll**: `z13_sig()` = `z13ctl profile --get` label + TDP PL1.
-  External changes (overlay/terminal/button) → notify + treated as an unlocked
-  manual pick. Signature needed because `profile --get` returns the active
-  custom-profile label (e.g. "custom") even when the platform profile changed.
-- **Config** reloaded every 30s; the settings window's Profiles tab edits the
-  `[service]` values (AC/battery/low-battery modes + threshold) and its
-  "Open config file…" button opens the raw file ($VISUAL/$EDITOR or xdg-open).
-  Template written on first run with extensive comments (PL1/PL2/PL3
-  semantics + 75W/force rule, fan-curve point format + profile-change gotcha,
-  CO safety range, ryzen_smu requirement).
-- **Polling is slim**: 5s poll = ONE `z13ctl profile --get` call (external
-  change detection; TDP-only changes won't notify). Power events are udev-driven
-  (zero idle cost) + a 30s safety `evaluate_power`. No other periodic work.
+- **External profile poll**: 8s read of `/sys/firmware/acpi/platform_profile`
+  (no subprocess). A firmware profile that does not match the last applied
+  mode is treated as an unlocked manual pick. TDP-only changes do not notify.
+- **Config** is parsed on mtime change (file watcher); the settings window's
+  Profiles tab edits the `[service]` values (AC/battery/low-battery modes +
+  threshold) and its "Open config file…" button opens the raw file
+  ($VISUAL/$EDITOR or xdg-open). Template written on first run with extensive
+  comments (PL1/PL2/PL3 semantics + 75W/force rule, fan-curve point format +
+  profile-change gotcha, CO safety range, ryzen_smu requirement).
+- **Polling is slim**: idle path is sysfs + udev. Power events are udev-driven
+  (zero idle cost) + a 30s safety `evaluate_power` that reuses the cached
+  config parse. `z13ctl` runs only when applying a mode or from the settings
+  window / Diagnose. Startup diagnose is deferred 20s so login is not slammed.
 - **Diagnose**: `z13-power diagnose` subcommand checks hardware (DMI), z13ctl,
   users group, udev rules, sysfs writability, daemon, `z13ctl status`, ryzen_smu,
   notify-send — each with a fix; exit 0/1. Tray menu has **Diagnose…**
-  (QMessageBox) and the service runs it at startup, notifying only on FAIL.
+  (QMessageBox) and the service runs it 20s after startup, notifying only on FAIL.
 - **ryzen_smu detection**: module name in /proc/modules is `ryzen_smu` (not
   `ryzen_smu_drv`); check `/sys/kernel/ryzen_smu_drv` dir instead. This bug
   silently skipped undervolt on this machine until fixed.
@@ -128,9 +128,13 @@ State: `automatic` (default), `manual_mode`, `locked`.
   refresh does not swallow the icon.
 - **Omarchy theme**: `service/z13_power_theme.py` reads
   `~/.local/state/omarchy/current/theme/{colors,shell}.toml` and the
-  fontconfig monospace family. Applied as Fusion + QSS to the settings
-  window, diagnose dialog, and a frameless ThemedMenu (gtk3 would otherwise
-  draw Adwaita). Live-reloads on theme-set.
+  fontconfig monospace family. Applied as Fusion + QSS to the diagnose
+  dialog and a frameless ThemedMenu (gtk3 would otherwise draw Adwaita).
+  The settings window uses the same tokens as the tray flyout (hero,
+  sidebar nav, section headers, bordered pills, toggle rows) instead of
+  a stock QTabWidget. Live-reloads on theme-set. Launchers prefer
+  `~/.local/bin/z13-power-settings` so a from-source install wins over
+  the packaged `/usr/bin` copy.
 - **Panel IPC**: `~/.local/state/z13-power/status.json` (mode, automatic,
   locked, ac, capacity, tdp, profile) written from `update_tray`.
   `command.json` (`op=mode|automatic|lock`) is consumed by a directory

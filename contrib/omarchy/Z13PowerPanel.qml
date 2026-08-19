@@ -15,6 +15,7 @@ Column {
 
   property var bar: null
   property color foreground: bar ? bar.foreground : Color.foreground
+  property color accent: Color.accent
   property string fontFamily: bar ? bar.fontFamily : Style.font.family
   property var run: bar && typeof bar.run === "function" ? bar.run : function() {}
 
@@ -88,6 +89,23 @@ Column {
     send("lock", { locked: !locked })
   }
 
+  function toggleDiagnose() {
+    if (root.diagnoseOpen) {
+      root.diagnoseOpen = false
+      root.diagnoseBusy = false
+      diagnoseProc.running = false
+      return
+    }
+    if (root.diagnoseBusy) return
+    if (root.diagnoseText !== "") {
+      root.diagnoseOpen = true
+      return
+    }
+    root.diagnoseBusy = true
+    diagnoseProc.running = false
+    diagnoseProc.running = true
+  }
+
   FileView {
     id: statusFile
     path: Quickshell.env("HOME") + "/.local/state/z13-power/status.json"
@@ -102,13 +120,7 @@ Column {
   }
 
   Component.onCompleted: statusFile.reload()
-
-  Timer {
-    interval: 2000
-    repeat: true
-    running: root.visible
-    onTriggered: statusFile.reload()
-  }
+  onVisibleChanged: if (visible) statusFile.reload()
 
   Process {
     id: cmdProc
@@ -250,6 +262,7 @@ Column {
           anchors.verticalCenterOffset: Math.round(autoLabel.topPadding / 2)
           checked: root.automatic
           foreground: root.foreground
+          accent: root.accent
           onToggled: root.toggleAutomatic()
         }
       }
@@ -275,11 +288,13 @@ Column {
           text: modelData.label
           fontSize: Style.font.bodySmall
           foreground: root.foreground
+          accent: root.accent
           fontFamily: root.fontFamily
           horizontalPadding: Style.spacing.controlPaddingX
           verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
           bordered: true
           active: root.activeMode === modelData.id
+          selected: root.activeMode === modelData.id
           onClicked: root.setMode(modelData.id)
         }
       }
@@ -296,6 +311,7 @@ Column {
       : "Keep this mode when you plug in or unplug"
     checked: root.locked
     foreground: root.foreground
+    accent: root.accent
     fontFamily: root.fontFamily
     opacity: root.automatic ? 0.45 : 1
     onClicked: if (!root.automatic) root.toggleLock()
@@ -310,10 +326,13 @@ Column {
       text: "Settings"
       iconText: root.settingsGlyph
       foreground: root.foreground
+      accent: root.accent
       fontFamily: root.fontFamily
       bordered: true
       onClicked: {
-        cmdProc.command = ["z13-power-settings"]
+        var local = Quickshell.env("HOME") + "/.local/bin/z13-power-settings"
+        cmdProc.running = false
+        cmdProc.command = [local]
         cmdProc.running = true
       }
     }
@@ -323,13 +342,11 @@ Column {
       text: root.diagnoseBusy ? "Checking…" : "Diagnose"
       iconText: root.diagnoseGlyph
       foreground: root.foreground
+      accent: root.accent
       fontFamily: root.fontFamily
       bordered: true
-      onClicked: {
-        if (root.diagnoseBusy) return
-        root.diagnoseBusy = true
-        diagnoseProc.running = true
-      }
+      active: root.diagnoseOpen
+      onClicked: root.toggleDiagnose()
     }
   }
 

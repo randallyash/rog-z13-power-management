@@ -258,10 +258,10 @@ case "${1:-}" in
     z13ctl undervolt --get 2>/dev/null || echo "  (unavailable)"
     ;;
   settings)
-    if command -v z13-power-settings >/dev/null 2>&1; then
-      exec z13-power-settings
-    elif [[ -x "$HOME/.local/bin/z13-power-settings" ]]; then
+    if [[ -x "$HOME/.local/bin/z13-power-settings" ]]; then
       exec "$HOME/.local/bin/z13-power-settings"
+    elif command -v z13-power-settings >/dev/null 2>&1; then
+      exec z13-power-settings
     else
       die "z13-power-settings not found — reinstall z13-power (or run: ./install.sh)"
     fi
