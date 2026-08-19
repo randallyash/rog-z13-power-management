@@ -53,11 +53,26 @@ modes:
   max          performance profile, TDP 93 forced, undervolt reset
   silent       quiet profile, TDP 20/40/40, undervolt -20 mV
   lowpower     quiet profile, TDP 5 W, undervolt -25 mV
+  automatic    return the tray service to Automatic (per power state)
+  lock         lock the current manual profile
+  unlock       unlock the current profile
   status       show current profile / TDP / fan curve / undervolt
   settings     open the settings window (lighting, fan curve, battery, power)
   diagnose     check z13 setup (hardware, perms, daemon, modules) and show fixes
   help         show this message
 EOF
+}
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/z13-power"
+
+service_cmd() {
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$1" > "$STATE_DIR/command.json.tmp"
+  mv -f "$STATE_DIR/command.json.tmp" "$STATE_DIR/command.json"
+}
+
+service_running() {
+  systemctl --user is-active --quiet z13-power-service 2>/dev/null
 }
 
 diagnose() {
@@ -132,6 +147,17 @@ diagnose() {
   return 0
 }
 
+# When the tray service is running it owns profile switches, so hand the
+# request over instead of racing it with a second z13ctl apply.
+case "${1:-}" in
+  balanced|performance|max|silent|lowpower)
+    if service_running; then
+      service_cmd "{\"op\":\"mode\",\"mode\":\"$1\"}"
+      exit 0
+    fi
+    ;;
+esac
+
 case "${1:-}" in
   balanced)
     require_z13ctl
@@ -171,6 +197,18 @@ case "${1:-}" in
     z13ctl fancurve --reset
     apply_undervolt -25
 
+    ;;
+  automatic)
+    service_cmd '{"op":"automatic"}'
+    ;;
+  lock)
+    service_cmd '{"op":"lock","locked":true}'
+    ;;
+  unlock)
+    service_cmd '{"op":"lock","locked":false}'
+    ;;
+  cmd)
+    service_cmd "${2:-{}}"
     ;;
   status)
     require_z13ctl

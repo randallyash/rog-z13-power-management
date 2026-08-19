@@ -56,10 +56,16 @@ mkdir -p "$BIN_DIR"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cp "$SCRIPT_DIR/scripts/z13-power" "$BIN_DIR/z13-power"
 chmod +x "$BIN_DIR/z13-power"
+# packaged installs put the CLI in /usr/bin; keep that copy in sync too when
+# this machine is using the from-source override.
+if [[ -w /usr/share/z13-power-management/z13-power ]]; then
+  cp "$SCRIPT_DIR/scripts/z13-power" /usr/share/z13-power-management/z13-power
+fi
 cp "$SCRIPT_DIR/service/z13-power-service" "$BIN_DIR/z13-power-service"
 chmod +x "$BIN_DIR/z13-power-service"
 cp "$SCRIPT_DIR/service/z13-power-settings" "$BIN_DIR/z13-power-settings"
 chmod +x "$BIN_DIR/z13-power-settings"
+cp "$SCRIPT_DIR/service/z13_power_theme.py" "$BIN_DIR/z13_power_theme.py"
 OK "Installed z13-power + z13-power-service + z13-power-settings to $BIN_DIR"
 
 if ! python3 -c "import PyQt6, pyudev" >/dev/null 2>&1; then

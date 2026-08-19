@@ -114,11 +114,24 @@ State: `automatic` (default), `manual_mode`, `locked`.
   `ryzen_smu_drv`); check `/sys/kernel/ryzen_smu_drv` dir instead. This bug
   silently skipped undervolt on this machine until fixed.
 - **Tray icon**: QPainter-drawn ROG-style dark tile + lightning bolt, color
-  per mode (performance red, balanced cyan, silent green, max orange, lowpower
-  amber); tooltip shows mode + automatic/manual/locked. The SNI item must
+  per mode from the live Omarchy theme when present (else neon fallbacks);
+  tooltip shows mode + automatic/manual/locked. The SNI item must
   leave `IconName` empty so hosts (Omarchy/waybar) use `IconPixmap`. A
   non-empty theme name such as `preferences-system-power` wins over the
-  pixmap and shows a fixed yellow glyph on every mode.
+  pixmap and shows a fixed yellow glyph on every mode. The dbus thread
+  re-registers with StatusNotifierWatcher on NameOwnerChanged so a bar
+  refresh does not swallow the icon.
+- **Omarchy theme**: `service/z13_power_theme.py` reads
+  `~/.local/state/omarchy/current/theme/{colors,shell}.toml` and the
+  fontconfig monospace family. Applied as Fusion + QSS to the settings
+  window, diagnose dialog, and a frameless ThemedMenu (gtk3 would otherwise
+  draw Adwaita). Live-reloads on theme-set.
+- **Panel IPC**: `~/.local/state/z13-power/status.json` (mode, automatic,
+  locked, ac, capacity, tdp, profile) written from `update_tray`.
+  `command.json` (`op=mode|automatic|lock`) is consumed by a directory
+  watcher. `z13-power` CLI forwards mode/automatic/lock to that file when
+  the service is active. `contrib/omarchy/Z13PowerPanel.qml` is the Omarchy
+  flyout that uses it.
 - **Notifications**: `notify-send` on every switch + external change. Single
   notifier — `z13-power` itself is silent.
 - Service PATH (systemd) does NOT include `~/.local/bin` — resolves z13-power
@@ -165,8 +178,10 @@ State: `automatic` (default), `manual_mode`, `locked`.
 - depends: `z13ctl-bin python-pyqt6 python-pyudev libnotify`; optdepends:
   `ryzen_smu-dkms-git`. (z13gui-bin was dropped when the settings window
   replaced it; the pkgbuilds PKGBUILD now ships `z13-power-settings`.)
-- package(): installs z13-power, z13-power-service, z13-power-settings +
-  `/usr/lib/systemd/user/` unit, z13-power-config, powerdevilrc, LICENSE.
+- package(): installs z13-power, z13-power-service, z13-power-settings,
+  z13_power_theme.py + `/usr/lib/systemd/user/` unit, z13-power-config,
+  powerdevilrc, LICENSE. Theme module must sit next to the scripts (same
+  share dir or `~/.local/bin`) so they can import it.
 - The packaged service's `.install` hook: enable+start on install;
   daemon-reload + restart on upgrade (new code deploys without re-login);
   stop+disable+cleanup on remove. Re-enters the user manager via
