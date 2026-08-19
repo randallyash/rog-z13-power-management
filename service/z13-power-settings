@@ -32,6 +32,18 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox,
                              QMainWindow, QPushButton, QSlider, QSpinBox,
                              QTabWidget, QVBoxLayout, QWidget)
 
+
+def _theme_mod():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for path in (here, "/usr/share/z13-power-management",
+                 os.path.expanduser("~/.local/bin")):
+        if os.path.isfile(os.path.join(path, "z13_power_theme.py")):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+            break
+    import z13_power_theme
+    return z13_power_theme
+
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
 CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
 
@@ -698,6 +710,15 @@ class SettingsWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    app.setApplicationName("z13-power")
+    try:
+        theme = _theme_mod()
+        theme.apply_to_app(app)
+        watcher = theme.ThemeWatcher(app)
+        watcher.changed.connect(lambda: theme.apply_to_app(app))
+        app._theme_watcher = watcher
+    except Exception:
+        pass
     win = SettingsWindow()
     win.show()
     return app.exec()

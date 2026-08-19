@@ -32,8 +32,13 @@ One command, six modes (`z13-power <mode>`) plus a settings window, and a tray a
 `z13-power-service` (system tray):
 - **Tray icon + menu** — left-click cycles profiles, right-click opens the
   menu; five modes + Automatic, current one marked. ROG-style icon tinted by
-  the active profile. On SNI trays (Omarchy, waybar, …) the service leaves
-  `IconName` empty so the host renders that pixmap instead of a theme icon.
+  the active profile (colours follow the Omarchy theme when one is present).
+  On SNI trays (Omarchy, waybar, …) the service leaves `IconName` empty so
+  the host renders that pixmap instead of a theme icon. The Qt menu and
+  settings window read `~/.local/state/omarchy/current/theme` and restyle
+  themselves; the SNI item re-registers when the bar restarts so the icon
+  does not vanish. On Omarchy the tray host can open a panel-style flyout
+  (hero, stats, profile pills) from `contrib/omarchy/Z13PowerPanel.qml`.
 - **Automatic** (default) — applies `on_ac` / `on_battery` / `on_low_battery`
   from config on login and power changes
 - **Manual picks** apply immediately; unless **Lock profile** is checked, they
@@ -164,6 +169,13 @@ APIs, no PowerDevil hooks, no autoswitch. Everything runs on any desktop:
     job there).
   Other Wayland compositors need an SNI-capable tray (waybar, anyrun, …) and a
   notification daemon (swaync, mako, dunst, …) for the same features.
+
+  Omarchy specifically: the service writes `~/.local/state/z13-power/status.json`
+  and watches `command.json`, so a bar/tray panel can switch modes without
+  racing `z13ctl`. `z13-power automatic|lock|unlock` and `z13-power cmd '{...}'`
+  talk to that channel when the service is running. Drop
+  `contrib/omarchy/Z13PowerPanel.qml` into an Omarchy tray plugin and open it
+  instead of the dbusmenu list for the z13-power item.
 
 ## Configuration
 
