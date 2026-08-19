@@ -30,6 +30,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 
 from PyQt6.QtCore import (QFileSystemWatcher, QObject, Qt, QPoint, QPointF,
                           QRectF, QThread, QTimer, pyqtSignal)
@@ -300,20 +301,84 @@ def ryzen_smu_loaded():
     return os.path.isdir("/sys/kernel/ryzen_smu_drv")
 
 
+def firmware_profile():
+    """Active asus-wmi firmware profile (quiet/balanced/performance), or ''."""
+    try:
+        with open("/sys/firmware/acpi/platform_profile") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def custom_fan_pwm_enable():
+    """pwm1_enable on asus_custom_fan_curve (0=full, 1=custom, 2=auto), or ''."""
+    try:
+        for name in os.listdir("/sys/class/hwmon"):
+            base = os.path.join("/sys/class/hwmon", name)
+            try:
+                with open(os.path.join(base, "name")) as f:
+                    if f.read().strip() != "asus_custom_fan_curve":
+                        continue
+                with open(os.path.join(base, "pwm1_enable")) as f:
+                    return f.read().strip()
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return ""
+
+
+def wait_profile_settle(profile, timeout=0.5):
+    """Wait until a platform_profile write has landed and fans are in auto.
+
+    The kernel drops custom fan curves on every profile write. --force TDP
+    then needs to install its safety curve; that write is refused if the
+    previous profile change is still in flight (pwm still auto after the
+    curve was written). Two consecutive samples so we don't race the
+    handler. Returns False only if the firmware profile never matches.
+    """
+    deadline = time.monotonic() + timeout
+    matched = 0
+    while time.monotonic() < deadline:
+        if firmware_profile() == profile and custom_fan_pwm_enable() == "2":
+            matched += 1
+            if matched >= 2:
+                return True
+        else:
+            matched = 0
+        time.sleep(0.05)
+    return firmware_profile() == profile
+
+
+def z13ctl_ok(args):
+    r = z13ctl(args)
+    return r is not None and r.returncode == 0
+
+
 def apply_mode(mode_def):
     """Run the z13ctl commands described by a mode config dict. Returns True."""
     profile = mode_def.get("profile", "balanced")
+    tdp_force = str(mode_def.get("tdp_force", "false")).strip().lower() in (
+        "true", "yes", "1")
+    # Rewriting the same firmware profile still hits platform_profile, which
+    # restores stock PPT (performance = 70W) and drops custom fan curves.
+    # Skip it when we're already there so MAX is just the TDP write.
     if profile in ("quiet", "balanced", "performance"):
-        z13ctl(["profile", "--set", profile])
+        if firmware_profile() != profile:
+            if not z13ctl_ok(["profile", "--set", profile]):
+                return False
+            if tdp_force:
+                wait_profile_settle(profile)
     tdp = mode_def.get("tdp", "52 71 70").split()
     args = ["tdp", "--set"]
     if len(tdp) == 1:
         args.append(tdp[0])
     elif len(tdp) >= 3:
         args += [tdp[0], "--pl2", tdp[1], "--pl3", tdp[2]]
-    if str(mode_def.get("tdp_force", "false")).strip().lower() in ("true", "yes", "1"):
+    if tdp_force:
         args.append("--force")
-    z13ctl(args)
+    if not z13ctl_ok(args):
+        return False
     # Fan curve: only touched if the mode defines one (max omits it — reset
     # is refused above 75W PL1, where --force installs its own safety curve).
     fancurve = mode_def.get("fancurve")

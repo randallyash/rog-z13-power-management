@@ -80,6 +80,11 @@ State: `automatic` (default), `manual_mode`, `locked`.
   shells out to `z13-power` (removes both the config gap and double
   notifications from a stale z13-power). `z13-power` remains only as the
   manual CLI (its hardcoded presets match DEFAULT_MODES).
+- **Apply order**: `profile --set` is skipped when `/sys/firmware/acpi/platform_profile`
+  already matches. A redundant write still restores stock PPT (performance = 70W)
+  and drops custom fan curves, so MAX then races `--force` and stays at 70W.
+  After a *real* profile switch that needs `--force`, wait until fans are in
+  auto, then TDP once. A failed TDP is a failed apply (do not advertise Max).
 - **Automatic**: applies `on_ac` / `on_battery` / `on_low_battery` from config
   on login, on udev power_supply events (30s safety poll fallback), and after
   an unlocked manual pick is cleared.
