@@ -992,6 +992,8 @@ class Service:
         self._status_payload = None
         self._tray_color = None
         self._tray_tip = None
+        # Restore before apply_theme/update_tray, which rewrite status.json.
+        self._restore_session()
 
         # Classic Qt tray — used on KDE Plasma and X11, and as the fallback if
         # the SNI item below fails to register (a silent failure must never
@@ -1017,7 +1019,10 @@ class Service:
         self.menu.addSeparator()
         self.lock_action = QAction("Lock profile", self.menu, checkable=True)
         self.lock_action.toggled.connect(self.on_lock_toggled)
-        self.lock_action.setEnabled(False)
+        self.lock_action.setEnabled(not self.automatic)
+        self.lock_action.blockSignals(True)
+        self.lock_action.setChecked(self.locked)
+        self.lock_action.blockSignals(False)
         self.menu.addAction(self.lock_action)
 
         self.menu.addSeparator()
@@ -1099,6 +1104,8 @@ class Service:
             self._cfg_watcher.addPath(CONFIG_PATH)
         self._cfg_watcher.fileChanged.connect(self._on_config_changed)
         self._cfg_watcher.directoryChanged.connect(self._on_config_changed)
+        if self.sni is not None and not self.automatic:
+            self.sni.set_state(self.automatic, self.manual_mode, self.locked)
 
     def start(self):
         self.evaluate_power()
@@ -1332,6 +1339,8 @@ class Service:
             mode = self.cfg["on_ac"] if ac else self.cfg["on_battery"]
             if mode != self._last_applied:
                 self.apply(mode)
+        elif self.manual_mode and self.manual_mode != self._last_applied:
+            self.apply(self.manual_mode, force=True)
 
     def apply(self, mode, force=False):
         """Apply a mode; notify only when it actually changed (or force)."""
@@ -1400,6 +1409,22 @@ class Service:
         if parts and parts[0].lstrip("-").isdigit():
             return int(parts[0])
         return None
+
+    def _restore_session(self):
+        """Keep Automatic off across login if the user left it off."""
+        try:
+            with open(STATUS_PATH) as fh:
+                data = json.load(fh)
+        except (OSError, ValueError, TypeError):
+            return
+        if data.get("automatic") is not False:
+            return
+        mode = data.get("mode")
+        if mode not in MODE_ORDER:
+            return
+        self.automatic = False
+        self.manual_mode = mode
+        self.locked = bool(data.get("locked"))
 
     def write_status(self, mode=None):
         mode = mode or (self.manual_mode if not self.automatic else (self._last_applied or "performance"))

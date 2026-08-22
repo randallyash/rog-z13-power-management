@@ -75,7 +75,10 @@ click CYCLES to the next profile (Activate); right-click opens the menu.
   on success and `failed(reason)` on error, and the service falls back to the
   classic Qt tray (icon + cycling, no menu) after 15s or on failure.
 
-State: `automatic` (default), `manual_mode`, `locked`.
+State: `automatic` (default), `manual_mode`, `locked`. Automatic off,
+the manual mode, and lock are restored from `status.json` on login so a
+reboot does not silently re-enable Automatic. Unlocked manual still
+clears on a live AC/battery change.
 - **Executor**: the service runs `z13ctl` DIRECTLY per mode — it no longer
   shells out to `z13-power` (removes both the config gap and double
   notifications from a stale z13-power). `z13-power` remains only as the
@@ -86,8 +89,8 @@ State: `automatic` (default), `manual_mode`, `locked`.
   After a *real* profile switch that needs `--force`, wait until fans are in
   auto, then TDP once. A failed TDP is a failed apply (do not advertise Max).
 - **Automatic**: applies `on_ac` / `on_battery` / `on_low_battery` from config
-  on login, on udev power_supply events (30s safety poll fallback), and after
-  an unlocked manual pick is cleared.
+  on login (only if Automatic was still on), on udev power_supply events
+  (30s safety poll fallback), and after an unlocked manual pick is cleared.
 - **Manual pick**: applies immediately; unless **locked**, it clears on the
   next power-source change → back to Automatic. Locked picks survive changes.
 - **Low battery** (capacity <= `low_battery`): latches the configured
