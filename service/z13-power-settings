@@ -7,7 +7,8 @@
 # Everything is a thin wrapper over z13ctl:
 #   - Lighting:   apply / brightness / off (keyboard + lightbar, two zones)
 #   - Fan curve:  fancurve --get / --set / --reset (8-point curve)
-#   - Battery:    batterylimit --get / --set (charge cap 40–100)
+#   - Battery:    batterylimit --get / --set (charge cap 40–100; saved and
+#                 re-applied at login — ACPI does not keep it across reboot)
 #   - Tweaks:     paneloverdrive, bootsound (firmware attributes)
 #   - Telemetry:  live status readouts (APU temp, fan RPM, profile, TDP)
 #   - Profiles:   service.conf [service] section (AC/battery/low-battery modes)
@@ -46,6 +47,7 @@ def _theme_mod():
 
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
 CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
+BATTERY_PATH = os.path.expanduser("~/.config/z13-power/battery.conf")
 STATUS_PATH = os.path.expanduser("~/.local/state/z13-power/status.json")
 
 LIGHTING_MODES = ["static", "breathe", "cycle", "rainbow", "strobe", "off"]
@@ -108,6 +110,24 @@ def load_lighting():
             except configparser.Error:
                 pass
     return out
+
+
+def load_charge_limit():
+    cfg = configparser.ConfigParser()
+    cfg.read(BATTERY_PATH)
+    try:
+        val = int(cfg.get("battery", "charge_limit").strip())
+    except (configparser.Error, ValueError, OSError):
+        return None
+    return val if 40 <= val <= 100 else None
+
+
+def save_charge_limit(val):
+    cfg = configparser.ConfigParser()
+    cfg["battery"] = {"charge_limit": str(val)}
+    os.makedirs(os.path.dirname(BATTERY_PATH), exist_ok=True)
+    with open(BATTERY_PATH, "w") as f:
+        cfg.write(f)
 
 
 def save_lighting(lighting):
@@ -534,8 +554,9 @@ class BatteryTab(QWidget):
         v.addWidget(self.apply_btn)
 
         v.addWidget(T.Note(
-            "100% removes the limit (charge to full). The limit is set in "
-            "ACPI and persists across reboots.", theme))
+            "100% removes the limit (charge to full). Saved to battery.conf "
+            "and re-applied at login — ACPI does not keep it across reboot.",
+            theme))
 
         self.msg = T.StatusLine(theme)
         v.addWidget(self.msg)
@@ -548,19 +569,24 @@ class BatteryTab(QWidget):
             self.refresh()
 
     def refresh(self):
+        live = None
         r = z13ctl(["batterylimit", "--get"])
         if r is not None and r.stdout.strip():
             try:
-                val = int(r.stdout.strip())
-                self.slider.setValue(val)
-                self.current.set_value(f"{val}%")
-                return
+                live = int(r.stdout.strip())
             except ValueError:
                 pass
+        saved = load_charge_limit()
+        val = live if live is not None else saved
+        if val is not None:
+            self.slider.setValue(val)
+            self.current.set_value(f"{val}%")
+            return
         self.current.set_value("unknown")
 
     def apply(self):
         val = self.slider.value()
+        save_charge_limit(val)
         r = z13ctl(["batterylimit", "--set", str(val)])
         ok = r is not None and r.returncode == 0
         self.msg.set_result(ok, f"Charge limit set to {val}%." if ok else

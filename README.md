@@ -59,7 +59,8 @@ language as the tray flyout — instead of a stock Qt tab dialog:
   brightness. Selections persist in `lighting.conf` and are re-applied at login.
 - **Fan curve** — fetch the live 8-point curve, edit temp/speed pairs, apply or
   reset to firmware auto (75 W PL1 safety rules enforced).
-- **Battery** — charge limit slider (40–100%), shows the current limit.
+- **Battery** — charge limit slider (40–100%). Saved in `battery.conf` and
+  re-applied at login (the ACPI cap does not survive reboot).
 - **Tweaks** — panel overdrive and boot sound toggles.
 - **Profiles** — which mode runs on AC / battery / low battery and the
   low-battery threshold, written back to `service.conf`; "Open config file…"
