@@ -14,6 +14,7 @@
 #     forces the safety profile, then restores your locked pick)
 #   - "Settings…": opens the settings window; its Profiles tab edits the
 #     service config ("Open config file…" exposes the raw file)
+#   - re-applies saved lighting and charge limit at login
 #   - notifies (notify-send) on every switch and on external profile changes
 #
 # Config: ~/.config/z13-power/service.conf — every z13ctl call the service makes
@@ -68,6 +69,7 @@ except (ImportError, AttributeError):
 
 CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
+BATTERY_PATH = os.path.expanduser("~/.config/z13-power/battery.conf")
 STATE_DIR = os.path.expanduser("~/.local/state/z13-power")
 STATUS_PATH = os.path.join(STATE_DIR, "status.json")
 COMMAND_PATH = os.path.join(STATE_DIR, "command.json")
@@ -443,6 +445,20 @@ def apply_saved_lighting():
     if lighting["mode"] not in ("static",):
         args += ["--speed", lighting["speed"]]
     z13ctl(args)
+
+
+def apply_saved_charge_limit():
+    """Re-apply the charge cap; ACPI does not keep it across reboot on this unit."""
+    cfg = configparser.ConfigParser()
+    cfg.read(BATTERY_PATH)
+    if not cfg.has_section("battery"):
+        return
+    try:
+        limit = int(cfg.get("battery", "charge_limit").strip())
+    except (configparser.Error, ValueError):
+        return
+    if 40 <= limit <= 100:
+        z13ctl(["batterylimit", "--set", str(limit)])
 
 
 _cfg_mtime = None
@@ -1110,6 +1126,7 @@ class Service:
     def start(self):
         self.evaluate_power()
         apply_saved_lighting()
+        apply_saved_charge_limit()
         if self.sni is not None:
             self.sni.show()
             # Give the SNI item a grace period; fall back to the classic Qt

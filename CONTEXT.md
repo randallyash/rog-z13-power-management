@@ -51,8 +51,10 @@ TDP arg order: `--pl1 PL1 --pl2 PL2 --pl3 PL3`. UV steps skip gracefully when
 `ryzen_smu` module is absent.
 
 Lighting settings live in `~/.config/z13-power/lighting.conf` (`[lighting]`
-section — device/mode/color1/color2/speed/brightness). The settings window
-writes it; the service re-applies it at startup. Kept separate from the
+section — device/mode/color1/color2/speed/brightness). Charge cap lives in
+`~/.config/z13-power/battery.conf` (`[battery] charge_limit`). The settings
+window writes both; the service re-applies them at startup (ACPI charge limit
+does not survive reboot on this unit). Kept separate from the
 heavily-commented service.conf so a ConfigParser rewrite can't clobber docs.
 ## Service behavior
 
