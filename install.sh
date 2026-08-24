@@ -92,6 +92,13 @@ else
   OK "z13ctl udev rules already present"
 fi
 
+# ── 2b. ryzen_smu: headers for THIS kernel + DKMS module ──────────────────────
+if [[ -x "$BIN_DIR/z13-power" ]]; then
+  INFO "Setting up undervolt (kernel headers for $(uname -r) + ryzen_smu)..."
+  "$BIN_DIR/z13-power" setup-undervolt || \
+    WARN "setup-undervolt failed — Tweaks slider will save; re-run: z13-power setup-undervolt"
+fi
+
 # ── 3. Enable the daemon stack ────────────────────────────────────────────────
 systemctl --user enable --now z13ctl.socket z13ctl.service 2>/dev/null || \
   WARN "Could not enable z13ctl user units — are they installed (z13ctl setup)?"

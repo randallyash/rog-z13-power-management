@@ -26,8 +26,10 @@
 
 import asyncio
 import configparser
+import grp
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -70,6 +72,7 @@ except (ImportError, AttributeError):
 CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
 BATTERY_PATH = os.path.expanduser("~/.config/z13-power/battery.conf")
+TWEAKS_PATH = os.path.expanduser("~/.config/z13-power/tweaks.conf")
 STATE_DIR = os.path.expanduser("~/.local/state/z13-power")
 STATUS_PATH = os.path.join(STATE_DIR, "status.json")
 COMMAND_PATH = os.path.join(STATE_DIR, "command.json")
@@ -322,8 +325,18 @@ def firmware_profile():
         return ""
 
 
+_fan_pwm_path = None
+
+
 def custom_fan_pwm_enable():
     """pwm1_enable on asus_custom_fan_curve (0=full, 1=custom, 2=auto), or ''."""
+    global _fan_pwm_path
+    if _fan_pwm_path:
+        try:
+            with open(_fan_pwm_path) as f:
+                return f.read().strip()
+        except OSError:
+            _fan_pwm_path = None
     try:
         for name in os.listdir("/sys/class/hwmon"):
             base = os.path.join("/sys/class/hwmon", name)
@@ -331,8 +344,11 @@ def custom_fan_pwm_enable():
                 with open(os.path.join(base, "name")) as f:
                     if f.read().strip() != "asus_custom_fan_curve":
                         continue
-                with open(os.path.join(base, "pwm1_enable")) as f:
-                    return f.read().strip()
+                path = os.path.join(base, "pwm1_enable")
+                with open(path) as f:
+                    val = f.read().strip()
+                _fan_pwm_path = path
+                return val
             except OSError:
                 continue
     except OSError:
@@ -367,16 +383,23 @@ def z13ctl_ok(args):
     return r is not None and r.returncode == 0
 
 
+_last_tdp_args = None
+_last_co = None
+
+
 def apply_mode(mode_def):
     """Run the z13ctl commands described by a mode config dict. Returns True."""
+    global _last_tdp_args
     profile = mode_def.get("profile", "balanced")
     tdp_force = str(mode_def.get("tdp_force", "false")).strip().lower() in (
         "true", "yes", "1")
     # Rewriting the same firmware profile still hits platform_profile, which
     # restores stock PPT (performance = 70W) and drops custom fan curves.
     # Skip it when we're already there so MAX is just the TDP write.
+    skipped_profile = True
     if profile in ("quiet", "balanced", "performance"):
         if firmware_profile() != profile:
+            skipped_profile = False
             if not z13ctl_ok(["profile", "--set", profile]):
                 return False
             if tdp_force:
@@ -389,24 +412,32 @@ def apply_mode(mode_def):
         args += [tdp[0], "--pl2", tdp[1], "--pl3", tdp[2]]
     if tdp_force:
         args.append("--force")
-    if not z13ctl_ok(args):
-        return False
+    if args != _last_tdp_args:
+        if not z13ctl_ok(args):
+            return False
+        _last_tdp_args = args
     # Fan curve: only touched if the mode defines one (max omits it — reset
     # is refused above 75W PL1, where --force installs its own safety curve).
+    # Skip --reset when the firmware profile was already ours and fans are
+    # already in auto (a second z13ctl is a no-op). Still reset after a real
+    # profile switch, and when leaving Max's --force safety curve (pwm=1).
     fancurve = mode_def.get("fancurve")
     if fancurve is not None:
         fancurve = str(fancurve).strip()
         if fancurve in ("reset", "auto"):
-            z13ctl(["fancurve", "--reset"])
+            if not (skipped_profile and custom_fan_pwm_enable() == "2"):
+                z13ctl(["fancurve", "--reset"])
         else:
             z13ctl(["fancurve", "--set", fancurve])
+    if apply_saved_undervolt():
+        return True
     undervolt = str(mode_def.get("undervolt", "reset")).strip()
-    if undervolt != "reset" and not ryzen_smu_loaded():
+    val = _parse_co(undervolt)
+    if val is None:
+        return True
+    if val != 0 and not ryzen_smu_loaded():
         return True  # no ryzen_smu — profile/TDP/fancurve still applied
-    if undervolt == "reset":
-        z13ctl(["undervolt", "--reset"])
-    else:
-        z13ctl(["undervolt", "--set", undervolt])
+    apply_co(val)
     return True
 
 
@@ -457,8 +488,90 @@ def apply_saved_charge_limit():
         limit = int(cfg.get("battery", "charge_limit").strip())
     except (configparser.Error, ValueError):
         return
-    if 40 <= limit <= 100:
+    if not (40 <= limit <= 100):
+        return
+    path = "/sys/class/power_supply/BAT0/charge_control_end_threshold"
+    try:
+        with open(path) as f:
+            if int(f.read().strip()) == limit:
+                return
+    except (OSError, ValueError):
+        pass
+    try:
+        with open(path, "w") as f:
+            f.write(str(limit))
+        return
+    except OSError:
         z13ctl(["batterylimit", "--set", str(limit)])
+
+
+_tweaks_mtime = None
+_tweaks_val = None
+_tweaks_loaded = False
+
+
+def _parse_co(raw):
+    """Curve Optimizer mV (0 stock, negative UV), or None if unusable."""
+    raw = str(raw).strip()
+    if raw in ("reset", "stock", ""):
+        return 0
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if val > 0:
+        val = -val
+    return val if -40 <= val <= 0 else None
+
+
+def load_user_undervolt():
+    """Tweaks-tab CO offset in mV (0 stock, negative UV), or None if unset."""
+    global _tweaks_mtime, _tweaks_val, _tweaks_loaded
+    try:
+        mtime = os.path.getmtime(TWEAKS_PATH)
+    except OSError:
+        mtime = None
+    if _tweaks_loaded and mtime == _tweaks_mtime:
+        return _tweaks_val
+    _tweaks_mtime = mtime
+    _tweaks_loaded = True
+    if mtime is None:
+        _tweaks_val = None
+        return None
+    cfg = configparser.ConfigParser()
+    cfg.read(TWEAKS_PATH)
+    try:
+        raw = cfg.get("tweaks", "undervolt").strip()
+    except (configparser.Error, OSError):
+        _tweaks_val = None
+        return None
+    _tweaks_val = _parse_co(raw)
+    return _tweaks_val
+
+
+def apply_co(val):
+    """Set all-core CO in mV (0 = stock). Skip the SMU write if already there."""
+    global _last_co
+    if val is None:
+        return False
+    if not ryzen_smu_loaded():
+        return False
+    if _last_co == val:
+        return True
+    ok = z13ctl_ok(["undervolt", "--reset"] if val == 0 else
+                   ["undervolt", "--set", str(val)])
+    if ok:
+        _last_co = val
+    return ok
+
+
+def apply_saved_undervolt():
+    """Apply the Tweaks slider CO if the user set one. Returns True if used."""
+    val = load_user_undervolt()
+    if val is None:
+        return False
+    apply_co(val)
+    return True
 
 
 _cfg_mtime = None
@@ -1127,6 +1240,7 @@ class Service:
         self.evaluate_power()
         apply_saved_lighting()
         apply_saved_charge_limit()
+        apply_saved_undervolt()
         if self.sni is not None:
             self.sni.show()
             # Give the SNI item a grace period; fall back to the classic Qt
@@ -1166,11 +1280,32 @@ class Service:
                f"Menu backend unavailable ({reason}); using the fallback tray")
 
     def startup_diagnose(self):
-        report = run_diagnose()
-        fails = [line for line in report.splitlines() if line.startswith("[FAIL]")]
+        """Cheap PATH/sysfs checks — no z13ctl. Full report is Diagnose."""
+        fails = []
+        if not shutil.which("z13ctl"):
+            fails.append("[FAIL] z13ctl: not installed")
+        try:
+            if grp.getgrnam("users").gr_gid not in os.getgroups():
+                fails.append("[FAIL] users group: not a member")
+        except (KeyError, OSError):
+            fails.append("[FAIL] users group: not a member")
+        if not os.path.isfile("/etc/udev/rules.d/99-z13ctl.rules"):
+            fails.append("[FAIL] udev rules: missing")
+        writable = False
+        try:
+            root = "/sys/class/platform-profile"
+            for name in os.listdir(root):
+                path = os.path.join(root, name, "profile")
+                if os.path.isfile(path) and os.access(path, os.W_OK):
+                    writable = True
+                    break
+        except OSError:
+            pass
+        if not writable:
+            fails.append("[FAIL] sysfs: platform-profile not writable")
         if fails:
             notify("z13-power: setup problem",
-                   " · ".join(fails) or "run 'z13-power diagnose' for details")
+                   " · ".join(fails) + " — run 'z13-power diagnose'")
 
     def on_activated(self, reason):
         # Qt QSystemTrayIcon path (KDE, or any X11 desktop). On KDE the shell

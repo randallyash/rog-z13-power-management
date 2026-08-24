@@ -54,7 +54,9 @@ Lighting settings live in `~/.config/z13-power/lighting.conf` (`[lighting]`
 section — device/mode/color1/color2/speed/brightness). Charge cap lives in
 `~/.config/z13-power/battery.conf` (`[battery] charge_limit`). The settings
 window writes both; the service re-applies them at startup (ACPI charge limit
-does not survive reboot on this unit). Kept separate from the
+does not survive reboot on this unit). Tweaks undervolt (Curve Optimizer,
+0 to -40 mV) lives in `~/.config/z13-power/tweaks.conf` and overrides the
+per-mode `undervolt=` recipe after every profile apply. Kept separate from the
 heavily-commented service.conf so a ConfigParser rewrite can't clobber docs.
 ## Service behavior
 
@@ -114,8 +116,13 @@ clears on a live AC/battery change.
   profile-change gotcha, CO safety range, ryzen_smu requirement).
 - **Polling is slim**: idle path is sysfs + udev. Power events are udev-driven
   (zero idle cost) + a 30s safety `evaluate_power` that reuses the cached
-  config parse. `z13ctl` runs only when applying a mode or from the settings
-  window / Diagnose. Startup diagnose is deferred 20s so login is not slammed.
+  config parse. `z13ctl` runs only when a mode actually changes (profile/TDP/
+  fan/UV writes skip if the target already matches). Tweaks.conf is mtime-
+  cached; the last CO is remembered so start() + apply_mode do not double-
+  hit the SMU. Startup diagnose is deferred 20s and is PATH/sysfs only (no
+  `z13ctl`). Settings tabs are built on first view; Tweaks/Fan/Battery/
+  Telemetry reads go through sysfs (k10temp, asus fans, panel_od, boot_sound,
+  ppt_pl1_spl, charge_control_end_threshold) and fall back to z13ctl.
 - **Diagnose**: `z13-power diagnose` subcommand checks hardware (DMI), z13ctl,
   users group, udev rules, sysfs writability, daemon, `z13ctl status`, ryzen_smu,
   notify-send — each with a fix; exit 0/1. Tray menu has **Diagnose…**
@@ -189,13 +196,15 @@ clears on a live AC/battery change.
 ## Packaging
 
 - PKGBUILD `z13-power-git` in the `pkgbuilds` repo (paru custom source).
-- depends: `z13ctl-bin python-pyqt6 python-pyudev libnotify`; optdepends:
-  `ryzen_smu-dkms-git`. (z13gui-bin was dropped when the settings window
-  replaced it; the pkgbuilds PKGBUILD now ships `z13-power-settings`.)
+- depends: `z13ctl-bin python-pyqt6 python-pyudev libnotify python-dbus-next
+  ryzen_smu-dkms-git`. Undervolt needs a kernel module rebuilt for each
+  kernel via DKMS — do not ship a prebuilt .ko. `ryzen_smu-dkms-git` is
+  the amkillam fork (Strix Halo). Kernel `-headers` for the running kernel
+  must be installed or DKMS cannot build. (z13gui-bin was dropped when the
+  settings window replaced it.)
 - package(): installs z13-power, z13-power-service, z13-power-settings,
-  z13_power_theme.py + `/usr/lib/systemd/user/` unit, z13-power-config,
-  powerdevilrc, LICENSE. Theme module must sit next to the scripts (same
-  share dir or `~/.local/bin`) so they can import it.
+  z13_power_theme.py, contrib/ryzen-smu udev + modules-load, systemd user
+  unit, z13-power-config, powerdevilrc, LICENSE.
 - The packaged service's `.install` hook: enable+start on install;
   daemon-reload + restart on upgrade (new code deploys without re-login);
   stop+disable+cleanup on remove. Re-enters the user manager via
