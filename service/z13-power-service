@@ -1535,6 +1535,10 @@ class Service:
         self.low_latched = False
         ac, _ = read_power()
         self.last_ac = ac
+        self._pending_ac = None
+        self._ac_confirm_timer = QTimer()
+        self._ac_confirm_timer.setSingleShot(True)
+        self._ac_confirm_timer.timeout.connect(self._confirm_power_change)
         self.last_fw_profile = firmware_profile()
         self.last_profile = self.last_fw_profile
         self._last_applied = None
@@ -1886,19 +1890,31 @@ class Service:
         self.cfg = load_config()
         ac, capacity = read_power()
         if ac != self.last_ac:
-            # USB-C PD can glitch AC0 for one read. Confirm in this call —
-            # waiting for a second udev event (or the 30s timer) meant a
-            # quick unplug/replug never committed, so Automatic stayed off
-            # while power-profiles-daemon switched the firmware anyway.
-            time.sleep(0.08)
-            ac2, cap2 = read_power()
-            if ac2 != ac:
-                return
-            ac, capacity = ac2, cap2 if cap2 is not None else capacity
-            self.last_ac = ac
-            if not self.automatic and not self.locked:
-                # An unlocked manual pick clears on power-source change.
-                self.set_automatic(refresh=False)
+            # USB-C PD can glitch AC0 for one read. Confirm 80ms later on a
+            # timer — do not sleep on the Qt thread (that hitch the tray).
+            self._pending_ac = ac
+            if not self._ac_confirm_timer.isActive():
+                self._ac_confirm_timer.start(80)
+            return
+        self._apply_power_state(ac, capacity)
+
+    def _confirm_power_change(self):
+        ac, capacity = read_power()
+        if ac != self._pending_ac:
+            self._pending_ac = None
+            return
+        if ac == self.last_ac:
+            self._pending_ac = None
+            return
+        self.last_ac = ac
+        self._pending_ac = None
+        if not self.automatic and not self.locked:
+            # An unlocked manual pick clears on power-source change.
+            self.set_automatic(refresh=False)
+        self.cfg = load_config()
+        self._apply_power_state(ac, capacity)
+
+    def _apply_power_state(self, ac, capacity):
         low = not ac and capacity is not None and capacity <= self.cfg["low_battery"]
         if low:
             # Safety rule: low battery forces the configured profile.

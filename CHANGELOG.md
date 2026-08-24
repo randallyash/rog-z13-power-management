@@ -89,6 +89,10 @@ keep that recipe. Flyout reloads while it is open.
 
 Lock Silent if you want Silent to survive unplug.
 
+`z13-power diagnose` warns if **power-profiles-daemon** or **z13ctl
+autoswitch** is also switching on plug/unplug. Plug/unplug confirm is a
+timer, not a sleep on the tray thread.
+
 ---
 
 ## The headline numbers

@@ -107,10 +107,8 @@ clears on a live AC/battery change.
   else passed to `--set` as the 8-point string), `undervolt` (`reset` → `--reset`,
   else `--set <v>`, skipped without ryzen_smu). DEFAULT_MODES are the fallback.
 - **Power-source change**: one AC0 udev event, confirmed with a second
-  sysfs read 80ms later in the same call. (Waiting for a second event
-  missed quick unplug/replug; power-profiles-daemon still switched
-  firmware and the tray stayed on the old manual pick.) Unlocked manual
-  → Automatic, then on_ac / on_battery.
+  sysfs read 80ms later on a QTimer (do not sleep on the Qt thread).
+  Unlocked manual → Automatic, then on_ac / on_battery.
 - **External profile poll**: 8s read of `/sys/firmware/acpi/platform_profile`
   (no subprocess). If it matches the last applied mode, only `last_fw_profile`
   is updated. If Automatic or Lock is on, re-apply our recipe (do not turn

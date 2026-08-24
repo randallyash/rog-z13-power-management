@@ -259,6 +259,24 @@ diagnose() {
     printf '[WARN] notify-send: not found — install libnotify for popups\n'
     warns=$((warns+1))
   fi
+  if command -v z13ctl >/dev/null 2>&1; then
+    local as
+    as="$(z13ctl autoswitch --get 2>/dev/null || true)"
+    if printf '%s\n' "$as" | grep -qi '^Autoswitch:[[:space:]]*enabled'; then
+      printf '[WARN] z13ctl autoswitch: enabled — races this service on plug/unplug\n'
+      printf '       disable: z13ctl autoswitch --clear\n'
+      warns=$((warns+1))
+    else
+      printf '[ OK ] z13ctl autoswitch: off\n'
+    fi
+  fi
+  if systemctl is-active --quiet power-profiles-daemon.service 2>/dev/null; then
+    printf '[WARN] power-profiles-daemon: active — also switches firmware on plug/unplug\n'
+    printf '       disable: sudo systemctl disable --now power-profiles-daemon\n'
+    warns=$((warns+1))
+  else
+    printf '[ OK ] power-profiles-daemon: not active\n'
+  fi
   printf '\nSummary: %d failure(s), %d warning(s).\n' "$fails" "$warns"
   if [[ "$fails" -gt 0 ]]; then
     printf 'Next steps:\n'
