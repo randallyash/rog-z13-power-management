@@ -13,6 +13,24 @@ Hyprland, X11 or Wayland.** You do not need Omarchy. You do not need KDE.
 
 ---
 
+## Omarchy — z13 pills on the stock battery widget
+
+On Omarchy, install no longer leaves you with a second bolt icon.
+`z13-power-omarchy-setup` (run from `install.sh` when `~/.config/omarchy`
+exists) copies two user plugins and **replaces only the power slot**:
+
+- **`z13.power`** — same battery flyout, plus Max / Perf / Mid / Silent /
+  Low, Automatic, and Lock. Stock `omarchy.power` is disabled, not deleted.
+- **`z13.battery`** — low-battery warnings; skips Omarchy’s
+  `powerprofiles-set` while we own switching.
+
+Nothing in `/usr/share/omarchy` is touched. `omarchy update` does not
+remove the user plugins. `omarchy refresh shell` can put `omarchy.power`
+back; re-run `z13-power-omarchy-setup`. KDE / Cachy without Omarchy never
+load this; they keep the bolt tray.
+
+---
+
 ## Armory Crate button
 
 The side button on the tablet (KEY_PROG3) used to open Armory Crate on

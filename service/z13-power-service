@@ -689,6 +689,25 @@ def desktop_needs_sni():
     return "kde" not in os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
 
+def _omarchy_power_panel_owns_ui():
+    """True when the Omarchy bar uses z13.power (or a ramzal.power leftover)."""
+    path = os.path.expanduser("~/.config/omarchy/shell.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError, TypeError):
+        return False
+    layout = ((data.get("bar") or {}).get("layout") or {})
+    for entries in layout.values():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            eid = entry if isinstance(entry, str) else (entry or {}).get("id")
+            if eid in ("z13.power", "ramzal.power"):
+                return True
+    return False
+
+
 def z13ctl_socket_path():
     runtime = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
     return os.path.join(runtime, "z13ctl", "z13ctl.sock")
@@ -1152,7 +1171,11 @@ if _DBUS_NEXT_OK:
 
         @dbus_property(access=PropertyAccess.READ)
         def Status(self) -> "s":
-            return "Active"
+            return self._owner._status
+
+        @signal()
+        def NewStatus(self):
+            pass
 
         @dbus_property(access=PropertyAccess.READ)
         def ItemIsMenu(self) -> "b":
@@ -1302,6 +1325,7 @@ if _DBUS_NEXT_OK:
             self._exported = False
             self._icon_pixmaps = []
             self._tooltip = ""
+            self._status = "Passive" if _omarchy_power_panel_owns_ui() else "Active"
             self._automatic = True
             self._manual_mode = None
             self._locked = False
@@ -1440,6 +1464,8 @@ if _DBUS_NEXT_OK:
                 return
             if which == "NewIcon":
                 self._item.NewIcon()
+            elif which == "NewStatus":
+                self._item.NewStatus()
             else:
                 self._item.NewToolTip()
 

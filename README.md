@@ -203,12 +203,14 @@ APIs, no PowerDevil hooks, no autoswitch. Everything runs on any desktop:
   Other Wayland compositors need an SNI-capable tray (waybar, anyrun, …) and a
   notification daemon (swaync, mako, dunst, …) for the same features.
 
-  Omarchy specifically: the service writes `~/.local/state/z13-power/status.json`
-  and watches `command.json`, so a bar/tray panel can switch modes without
-  racing `z13ctl`. `z13-power automatic|lock|unlock` and `z13-power cmd '{...}'`
-  talk to that channel when the service is running. Drop
-  `contrib/omarchy/Z13PowerPanel.qml` into an Omarchy tray plugin and open it
-  instead of the dbusmenu list for the z13-power item.
+  Omarchy specifically: `install.sh` runs `z13-power-omarchy-setup`, which
+  puts **`z13.power`** in the battery slot (Max / Perf / Mid / Silent / Low,
+  Automatic, Lock) and **`z13.battery`** for low-battery warnings. Stock
+  `omarchy.power` is disabled, not edited. The SNI bolt goes Passive while
+  that widget is on the bar. `omarchy update` does not remove the user
+  plugins; `omarchy refresh shell` can restore the stock slot — re-run
+  `z13-power-omarchy-setup`. The service still writes `status.json` /
+  `command.json` so the panel never races `z13ctl`.
 
 ## Configuration
 
@@ -246,11 +248,10 @@ automatically every ~30s — no service restart needed.
   service would both fire on power changes and race each other. Leave autoswitch
   off: `z13ctl autoswitch --clear`
 - **Don't set per-state power profiles in your desktop's own power manager.**
-  On KDE that's System Settings → Power Management → "Performance"; on
-  Omarchy/Hyprland it's the bar's Power panel (which switches profiles and
-  remembers separate AC/battery choices). Any of these would write
-  `platform_profile` directly and fight the service. Keep the service as the
-  single profile switcher.
+  On KDE that's System Settings → Power Management → "Performance". On
+  Omarchy, `z13-power-omarchy-setup` replaces the bar's Power slot with
+  `z13.power` so that flyout talks to us instead of `powerprofiles-set`.
+  Keep the service as the single profile switcher.
 - The `max` / `lowpower` modes are manual (tray menu or terminal) — they are not
   wired into any power state.
 - Requires the z13ctl **daemon** running for TDP/fancurve/undervolt persistence.
@@ -262,13 +263,14 @@ automatically every ~30s — no service restart needed.
 ├── CHANGELOG.md            # what's new — features, compatibility, numbers
 ├── install.sh              # from-source installer (deps, units, config deploy)
 ├── scripts/
-│   └── z13-power           # the mode CLI: 6 modes + settings + setup-undervolt
+│   ├── z13-power           # the mode CLI: 6 modes + settings + setup-undervolt
+│   └── z13-power-omarchy-setup  # Omarchy: z13.power in the battery slot
 ├── service/
 │   ├── z13-power-service   # tray icon + power profile watcher (PyQt6)
 │   ├── z13-power-settings  # settings window: RGB, fan curve, battery, Tweaks
 │   └── z13-power-service.service   # systemd user unit
 ├── contrib/
-│   ├── omarchy/            # Z13PowerPanel.qml flyout
+│   ├── omarchy/            # z13.power + z13.battery user plugins
 │   ├── ryzen-smu/          # udev + modules-load for Curve Optimizer
 │   └── z13-power-config    # packaged helper: deploys KDE Plasma display settings
 ├── kde/

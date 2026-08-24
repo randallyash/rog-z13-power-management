@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Install z13.power + z13.battery into this user's Omarchy config.
+
+No-op if ~/.config/omarchy is missing (KDE / Cachy without Omarchy).
+Does not copy anyone's bar layout — only replaces the power widget slot
+and the battery service. Idempotent.
+"""
+from __future__ import print_function
+
+import json
+import os
+import shutil
+import sys
+
+HOME = os.path.expanduser("~")
+OMARCHY = os.path.join(HOME, ".config", "omarchy")
+SHELL = os.path.join(OMARCHY, "shell.json")
+PLUGINS = os.path.join(OMARCHY, "plugins")
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+CANDIDATES = [
+    os.path.join(os.path.dirname(HERE), "contrib", "omarchy"),
+    os.path.join(HERE, "..", "contrib", "omarchy"),
+    "/usr/share/z13-power-management/omarchy",
+]
+
+
+def src_root():
+    for path in CANDIDATES:
+        path = os.path.normpath(path)
+        if os.path.isdir(os.path.join(path, "z13.power")):
+            return path
+    return None
+
+
+def load_shell():
+    with open(SHELL, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def save_shell(data):
+    tmp = SHELL + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, SHELL)
+
+
+def replace_bar_id(layout, old_ids, new_id):
+    changed = False
+    if not isinstance(layout, dict):
+        return False
+    for section in ("left", "center", "right"):
+        entries = layout.get(section)
+        if not isinstance(entries, list):
+            continue
+        for i, entry in enumerate(entries):
+            if isinstance(entry, str) and entry in old_ids:
+                entries[i] = new_id
+                changed = True
+            elif isinstance(entry, dict) and entry.get("id") in old_ids:
+                entry["id"] = new_id
+                changed = True
+    return changed
+
+
+def ensure_plugin_list(data, plugin_id):
+    plugins = data.setdefault("plugins", [])
+    if not isinstance(plugins, list):
+        data["plugins"] = [{"id": plugin_id}]
+        return
+    for p in plugins:
+        pid = p if isinstance(p, str) else (p or {}).get("id")
+        if pid == plugin_id:
+            return
+        if pid in ("ramzal.battery",):
+            if isinstance(p, str):
+                plugins[plugins.index(p)] = {"id": plugin_id}
+            else:
+                p["id"] = plugin_id
+            return
+    plugins.append({"id": plugin_id})
+
+
+def ensure_disabled(data, ids):
+    disabled = data.setdefault("disabledPlugins", [])
+    if not isinstance(disabled, list):
+        data["disabledPlugins"] = list(ids)
+        return
+    for i in ids:
+        if i not in disabled:
+            disabled.append(i)
+
+
+def hide_bolt_on_trays(layout):
+    if not isinstance(layout, dict):
+        return
+    hide = ["z13-power", "z13-power-service"]
+    for section in ("left", "center", "right"):
+        entries = layout.get(section)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            eid = str(entry.get("id") or "")
+            if not eid.endswith(".tray"):
+                continue
+            hidden = entry.get("hidden")
+            if not isinstance(hidden, list):
+                hidden = []
+            for h in hide:
+                if h not in hidden:
+                    hidden.append(h)
+            entry["hidden"] = hidden
+
+
+def copy_plugin(src_root, name):
+    src = os.path.join(src_root, name)
+    dest = os.path.join(PLUGINS, name)
+    os.makedirs(dest, exist_ok=True)
+    for fname in os.listdir(src):
+        s = os.path.join(src, fname)
+        d = os.path.join(dest, fname)
+        if os.path.isfile(s):
+            shutil.copy2(s, d)
+
+
+def main():
+    if not os.path.isdir(OMARCHY) or not os.path.isfile(SHELL):
+        print("z13-power-omarchy-setup: not an Omarchy session — skipped")
+        return 0
+    root = src_root()
+    if not root:
+        print("z13-power-omarchy-setup: plugin files not found", file=sys.stderr)
+        return 1
+    os.makedirs(PLUGINS, exist_ok=True)
+    copy_plugin(root, "z13.power")
+    copy_plugin(root, "z13.battery")
+
+    data = load_shell()
+    bar = data.setdefault("bar", {})
+    layout = bar.setdefault("layout", {})
+    replace_bar_id(layout, ("omarchy.power", "ramzal.power"), "z13.power")
+    # If they never had a power widget, put ours on the right.
+    found = False
+    for section in ("left", "center", "right"):
+        for entry in layout.get(section) or []:
+            eid = entry if isinstance(entry, str) else (entry or {}).get("id")
+            if eid == "z13.power":
+                found = True
+    if not found:
+        layout.setdefault("right", []).append({"id": "z13.power"})
+
+    ensure_plugin_list(data, "z13.battery")
+    ensure_disabled(data, ("omarchy.battery", "omarchy.power", "ramzal.power", "ramzal.battery"))
+    hide_bolt_on_trays(layout)
+    save_shell(data)
+    print("z13-power-omarchy-setup: z13.power + z13.battery installed")
+    print("  bar slot uses z13.power (not your whole layout)")
+    print("  restart the shell if the flyout did not reload: omarchy restart shell")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

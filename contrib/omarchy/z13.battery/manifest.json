@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "z13.battery",
+  "name": "Z13 Battery",
+  "version": "1.0.0",
+  "author": "z13-power",
+  "description": "Low battery warning; skips Omarchy powerprofiles-set when z13-power is running",
+  "kinds": ["service"],
+  "entryPoints": {
+    "service": "Service.qml"
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.battery"
+  }
+}

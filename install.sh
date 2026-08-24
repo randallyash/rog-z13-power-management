@@ -86,6 +86,17 @@ systemctl --user enable --now z13-power-service.service 2>/dev/null || \
   WARN "Could not enable z13-power-service — start it with: systemctl --user start z13-power-service"
 OK "Enabled z13-power-service (tray icon + power watcher)"
 
+cp "$SCRIPT_DIR/scripts/z13-power-omarchy-setup" "$BIN_DIR/z13-power-omarchy-setup"
+chmod +x "$BIN_DIR/z13-power-omarchy-setup"
+if [[ -d "$HOME/.config/omarchy" ]]; then
+  INFO "Omarchy detected — installing z13.power into the battery flyout (not your whole bar)"
+  if python3 "$BIN_DIR/z13-power-omarchy-setup"; then
+    OK "Omarchy power slot is z13.power (stock omarchy.power left disabled)"
+  else
+    WARN "Omarchy setup failed — bolt tray still works; re-run: z13-power-omarchy-setup"
+  fi
+fi
+
 # ── 2. z13ctl device permissions (udev rules + perms service) ─────────────────
 if [[ ! -f /etc/udev/rules.d/99-z13ctl.rules ]]; then
   INFO "Running 'sudo z13ctl setup' to install udev rules + z13ctl-perms.service..."
