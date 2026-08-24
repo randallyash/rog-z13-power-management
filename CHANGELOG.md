@@ -67,6 +67,30 @@ once still pick the first nested display.
 
 ---
 
+## Bugfix — tray stuck on Silent while the fans changed
+
+Unlocked Silent, then unplug → chip went **Balanced**, plug → **Performance**
+(popup + fans). The bolt and Omarchy flyout stayed **Silent (manual)**.
+
+Three stacked bugs:
+
+1. We waited for a **second** AC udev event (or 30 s) before turning
+   Automatic back on. Unplug is one event. `power-profiles-daemon`
+   switched firmware immediately; we never left Silent.
+2. `status.json` was replaced as a new file, so the flyout’s file watch
+   died and froze on the old pick.
+3. An 8 s firmware poll treated **our own** profile write as “set
+   externally,” flipped Automatic off, and painted Silent over a live
+   Performance chip.
+
+**Fixed.** Confirm AC0 in the same call. Write status in place. Tray
+shows the mode we actually applied. While Automatic or Lock is on, we
+keep that recipe. Flyout reloads while it is open.
+
+Lock Silent if you want Silent to survive unplug.
+
+---
+
 ## The headline numbers
 
 The tray does **zero** `z13ctl` while nothing is changing. Plug/unplug is
@@ -183,7 +207,7 @@ changed. The bolt pixmap is cached.
   and PL1 **read sysfs** (`k10temp`, asus fans, `ppt_pl1_spl`, `panel_od`,
   `boot_sound`, `charge_control_end_threshold`). `z13ctl` is the fallback
 
-The Omarchy flyout was already cheap: `FileView` on `status.json`, no timer.
+The Omarchy flyout watches `status.json` (and reloads while open).
 
 ---
 
@@ -198,6 +222,7 @@ The Omarchy flyout was already cheap: `FileView` on `status.json`, no timer.
 | [#6](https://forgejo.fifthdread.com/Fifthdread/rog-z13-power-management/pulls/6) | Automatic-off survives reboot |
 | [#7](https://forgejo.fifthdread.com/Fifthdread/rog-z13-power-management/pulls/7) | Charge cap persisted in `battery.conf` |
 | [#8](https://forgejo.fifthdread.com/Fifthdread/rog-z13-power-management/pulls/8) | Tweaks undervolt, silicon lottery, skip-if-same apply path |
+| main | Armory + gamescope overlay; **tray follows plug/unplug** (bolt/flyout were stuck on Silent) |
 
 ---
 

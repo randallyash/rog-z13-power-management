@@ -1,8 +1,8 @@
 # ROG Flow Z13 — Power Management
 
 > **[What’s new →](CHANGELOG.md)** Armory Crate button · **gamescope in-game
-> overlay** · Tweaks undervolt · silicon lottery · charge cap that survives
-> reboot · **~99% less idle work** (~81 ms/min → ~0.6 ms/min).
+> overlay** · tray follows plug/unplug (bugfix) · Tweaks undervolt · silicon
+> lottery · charge cap that survives reboot · **~99% less idle work**.
 
 Automated power profile switching for the **2025 ASUS ROG Flow Z13 (GZ302)**.
 Plug in → performance mode. Unplug → balanced. Low battery → silent.
