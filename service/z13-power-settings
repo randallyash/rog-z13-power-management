@@ -9,7 +9,7 @@
 #   - Fan curve:  fancurve --get / --set / --reset (8-point curve)
 #   - Battery:    batterylimit --get / --set (charge cap 40–100; saved and
 #                 re-applied at login — ACPI does not keep it across reboot)
-#   - Tweaks:     paneloverdrive, bootsound (firmware attributes)
+#   - Tweaks:     paneloverdrive, bootsound, CPU undervolt (Curve Optimizer)
 #   - Telemetry:  live status readouts (APU temp, fan RPM, profile, TDP)
 #   - Profiles:   service.conf [service] section (AC/battery/low-battery modes)
 #
@@ -48,7 +48,11 @@ def _theme_mod():
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
 CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
 BATTERY_PATH = os.path.expanduser("~/.config/z13-power/battery.conf")
+TWEAKS_PATH = os.path.expanduser("~/.config/z13-power/tweaks.conf")
 STATUS_PATH = os.path.expanduser("~/.local/state/z13-power/status.json")
+ASUS_WMI = "/sys/devices/platform/asus-nb-wmi"
+BAT_LIMIT_PATH = "/sys/class/power_supply/BAT0/charge_control_end_threshold"
+BAT_CAPACITY_PATH = "/sys/class/power_supply/BAT0/capacity"
 
 LIGHTING_MODES = ["static", "breathe", "cycle", "rainbow", "strobe", "off"]
 BRIGHTNESS_LEVELS = ["off", "low", "medium", "high"]
@@ -128,6 +132,93 @@ def save_charge_limit(val):
     os.makedirs(os.path.dirname(BATTERY_PATH), exist_ok=True)
     with open(BATTERY_PATH, "w") as f:
         cfg.write(f)
+
+
+def load_undervolt():
+    """User Tweaks CO offset in mV (0 stock, negative undervolt), or None."""
+    cfg = configparser.ConfigParser()
+    cfg.read(TWEAKS_PATH)
+    try:
+        raw = cfg.get("tweaks", "undervolt").strip()
+        if raw in ("reset", "stock", ""):
+            return 0
+        val = int(raw)
+    except (configparser.Error, ValueError, OSError):
+        return None
+    if val > 0:
+        val = -val
+    return val if -40 <= val <= 0 else None
+
+
+def save_undervolt(val):
+    val = int(val)
+    if load_undervolt() == val:
+        return
+    cfg = configparser.ConfigParser()
+    if os.path.exists(TWEAKS_PATH):
+        cfg.read(TWEAKS_PATH)
+    if not cfg.has_section("tweaks"):
+        cfg.add_section("tweaks")
+    cfg.set("tweaks", "undervolt", str(val))
+    os.makedirs(os.path.dirname(TWEAKS_PATH), exist_ok=True)
+    with open(TWEAKS_PATH, "w") as f:
+        cfg.write(f)
+
+
+def ryzen_smu_loaded():
+    return os.path.isdir("/sys/kernel/ryzen_smu_drv")
+
+
+def _bin_score(rank):
+    """Map an AMD preferred-core rank (~160–240 on Strix Halo) to 50–99."""
+    score = int(round(50 + (float(rank) - 160) * 50 / 80))
+    return max(50, min(99, score))
+
+
+_lottery_cache = None
+
+
+def silicon_lottery():
+    """Approximate silicon quality from AMD CPPC preferred-core rankings.
+
+    ASUS BIOS SP uses fused VID/FIT tables we cannot read from userspace.
+    Prefcore ranking is the hardware's own per-core quality order. All
+    numbers we show use the same 50–99 scale so the overall score sits
+    between best and weakest. Cached for the process — ranks do not change.
+    """
+    global _lottery_cache
+    if _lottery_cache is not None:
+        return _lottery_cache or None
+    ranks = []
+    for i in range(16):
+        path = ("/sys/devices/system/cpu/cpu%d/cpufreq/"
+                "amd_pstate_prefcore_ranking" % i)
+        try:
+            with open(path) as f:
+                ranks.append(int(f.read().strip()))
+        except (OSError, ValueError):
+            continue
+    if not ranks:
+        _lottery_cache = False
+        return None
+    avg = sum(ranks) / len(ranks)
+    score = _bin_score(avg)
+    best = _bin_score(max(ranks))
+    worst = _bin_score(min(ranks))
+    # 50→stock, 99→-25 mV, in 5 mV steps. Conservative all-core start.
+    mag = int(round((score - 50) * 25 / 49 / 5.0)) * 5
+    mag = max(0, min(25, mag))
+    _lottery_cache = {
+        "score": score,
+        "best": best,
+        "worst": worst,
+        "suggest": -mag,
+        "avg_raw": avg,
+        "best_raw": max(ranks),
+        "worst_raw": min(ranks),
+        "n": len(ranks),
+    }
+    return _lottery_cache
 
 
 def save_lighting(lighting):
@@ -216,27 +307,68 @@ def save_service_config(updates):
 
 # ── status / telemetry parsing ───────────────────────────────────────────────
 
-def z13_status():
-    """Parse `z13ctl status` into a dict of key -> raw value."""
-    out = {}
-    r = z13ctl(["status"])
-    if r is None:
-        return out
-    for line in r.stdout.splitlines():
-        if ":" not in line:
-            continue
-        key, _, value = line.partition(":")
-        out[key.strip()] = value.strip()
-    return out
+def _read_sysfs(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _write_sysfs(path, value):
+    try:
+        with open(path, "w") as f:
+            f.write(str(value))
+        return True
+    except OSError:
+        return False
+
+
+_hwmon = {}
+
+
+def _hwmon_path(name):
+    """Resolve /sys/class/hwmon/* by name; cache until the path disappears."""
+    cached = _hwmon.get(name)
+    if cached and os.path.isdir(cached):
+        if _read_sysfs(os.path.join(cached, "name")) == name:
+            return cached
+    base = None
+    try:
+        for entry in os.listdir("/sys/class/hwmon"):
+            path = os.path.join("/sys/class/hwmon", entry)
+            if _read_sysfs(os.path.join(path, "name")) == name:
+                base = path
+                break
+    except OSError:
+        pass
+    _hwmon[name] = base
+    return base
 
 
 def fan_curve():
-    """Return (points, mode) from `z13ctl fancurve --get`.
+    """Return (points, mode) from asus_custom_fan_curve sysfs.
 
     points is a list of (temp_C, pwm) tuples; mode is 'custom' or 'auto' ('' if
-    the read fails).
+    the read fails). Falls back to `z13ctl fancurve --get` if sysfs is empty.
     """
     points, mode = [], ""
+    base = _hwmon_path("asus_custom_fan_curve")
+    if base:
+        enable = _read_sysfs(os.path.join(base, "pwm1_enable"))
+        mode = {"0": "full", "1": "custom", "2": "auto"}.get(enable or "", "")
+        ok = True
+        for i in range(1, 9):
+            temp = _read_sysfs(os.path.join(base, "pwm1_auto_point%d_temp" % i))
+            pwm = _read_sysfs(os.path.join(base, "pwm1_auto_point%d_pwm" % i))
+            try:
+                points.append((int(temp), int(pwm)))
+            except (TypeError, ValueError):
+                ok = False
+                break
+        if ok and len(points) == 8:
+            return points, mode
+    points, mode = [], mode
     r = z13ctl(["fancurve", "--get"])
     if r is None:
         return points, mode
@@ -258,6 +390,15 @@ def fan_curve():
 
 def tdp_pl1():
     """Current PL1 in watts (0 if it cannot be read)."""
+    raw = _read_sysfs(os.path.join(ASUS_WMI, "ppt_pl1_spl"))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        pass
+    st = read_status_file()
+    tdp = st.get("tdp")
+    if isinstance(tdp, int):
+        return tdp
     r = z13ctl(["tdp", "--get"])
     if r is None:
         return 0
@@ -570,12 +711,16 @@ class BatteryTab(QWidget):
 
     def refresh(self):
         live = None
-        r = z13ctl(["batterylimit", "--get"])
-        if r is not None and r.stdout.strip():
-            try:
-                live = int(r.stdout.strip())
-            except ValueError:
-                pass
+        raw = _read_sysfs(BAT_LIMIT_PATH)
+        try:
+            live = int(raw)
+        except (TypeError, ValueError):
+            r = z13ctl(["batterylimit", "--get"])
+            if r is not None and r.stdout.strip():
+                try:
+                    live = int(r.stdout.strip())
+                except ValueError:
+                    pass
         saved = load_charge_limit()
         val = live if live is not None else saved
         if val is not None:
@@ -587,8 +732,10 @@ class BatteryTab(QWidget):
     def apply(self):
         val = self.slider.value()
         save_charge_limit(val)
-        r = z13ctl(["batterylimit", "--set", str(val)])
-        ok = r is not None and r.returncode == 0
+        ok = _write_sysfs(BAT_LIMIT_PATH, val)
+        if not ok:
+            r = z13ctl(["batterylimit", "--set", str(val)])
+            ok = r is not None and r.returncode == 0
         self.msg.set_result(ok, f"Charge limit set to {val}%." if ok else
                             "Failed to set the charge limit.")
         self.refresh()
@@ -620,27 +767,121 @@ class PowerTab(QWidget):
 
         self.msg = T.StatusLine(theme)
         v.addWidget(self.msg)
+
+        v.addWidget(T.SectionHeader("CPU UNDERVOLT", theme))
+        uv_row = QHBoxLayout()
+        uv_row.setSpacing(12)
+        self.uv_slider = QSlider(Qt.Orientation.Horizontal)
+        self.uv_slider.setRange(0, 40)
+        self.uv_slider.setValue(0)
+        self.uv_value = QLabel("Stock")
+        self.uv_slider.valueChanged.connect(self._uv_label)
+        self.uv_slider.sliderReleased.connect(self.apply_undervolt)
+        self.uv_slider.valueChanged.connect(self._uv_maybe_apply)
+        uv_row.addWidget(self.uv_slider, 1)
+        uv_row.addWidget(self.uv_value)
+        v.addLayout(uv_row)
+
+        self.lottery = T.InfoRow("Silicon lottery", "—", theme)
+        v.addWidget(self.lottery)
+        self.suggest = T.InfoRow("Suggested UV", "—", theme)
+        v.addWidget(self.suggest)
+
+        self.uv_note = T.Note("", theme)
+        v.addWidget(self.uv_note)
         v.addStretch(1)
 
     def showEvent(self, event):
         super().showEvent(event)
         if not getattr(self, "_loaded", False):
             self._loaded = True
+            self._fill_lottery()
             self.refresh()
 
+    def _fill_lottery(self):
+        lot = silicon_lottery()
+        if not lot:
+            self.lottery.set_value("unavailable")
+            self.suggest.set_value("—")
+            return
+        self.lottery.set_value(
+            "%d / 100   (best core %d · weakest core %d)" % (
+                lot["score"], lot["best"], lot["worst"]))
+        if lot["suggest"] == 0:
+            self.suggest.set_value("Stock — step in −5 mV if you want to try")
+        else:
+            self.suggest.set_value(
+                "%d mV  (starting point; step by 5 mV and test)" % lot["suggest"])
+
+    def _uv_label(self, n):
+        self.uv_value.setText("Stock" if n == 0 else "-%d mV" % n)
+
+    def _uv_maybe_apply(self, _n):
+        if not self.uv_slider.isSliderDown():
+            self.apply_undervolt()
+
+    def apply_undervolt(self):
+        mag = self.uv_slider.value()
+        val = 0 if mag == 0 else -mag
+        if getattr(self, "_uv_applied", None) == val and ryzen_smu_loaded():
+            return
+        self._uv_applied = val
+        save_undervolt(val)
+        if not ryzen_smu_loaded():
+            self.msg.set_result(
+                False,
+                "Saved — needs ryzen_smu (paru -S ryzen_smu-dkms-git, amkillam fork) "
+                "before it can apply")
+            return
+        if val == 0:
+            r = z13ctl(["undervolt", "--reset"])
+        else:
+            r = z13ctl(["undervolt", "--set", str(val)])
+        ok = r is not None and r.returncode == 0
+        self.msg.set_result(
+            ok,
+            "Undervolt %s." % ("stock" if val == 0 else "%d mV" % val)
+            if ok else (r.stderr.strip() if r is not None else "z13ctl failed"))
+
     def refresh(self):
-        r = z13ctl(["paneloverdrive", "--get"])
-        if r is not None:
-            self.panel.setChecked(r.stdout.strip() == "1")
-        r = z13ctl(["bootsound", "--get"])
-        if r is not None:
-            self.boot.setChecked(r.stdout.strip() == "1")
+        raw = _read_sysfs(os.path.join(ASUS_WMI, "panel_od"))
+        if raw is not None:
+            self.panel.setChecked(raw == "1")
+        else:
+            r = z13ctl(["paneloverdrive", "--get"])
+            if r is not None:
+                self.panel.setChecked(r.stdout.strip() == "1")
+        raw = _read_sysfs(os.path.join(ASUS_WMI, "boot_sound"))
+        if raw is not None:
+            self.boot.setChecked(raw == "1")
+        else:
+            r = z13ctl(["bootsound", "--get"])
+            if r is not None:
+                self.boot.setChecked(r.stdout.strip() == "1")
+        saved = load_undervolt()
+        if saved is not None:
+            mag = abs(int(saved))
+            self.uv_slider.blockSignals(True)
+            self.uv_slider.setValue(mag)
+            self.uv_slider.blockSignals(False)
+            self._uv_label(mag)
+        if not ryzen_smu_loaded():
+            self.uv_note.setText(
+                "ryzen_smu is not loaded — the slider still saves. Run: "
+                "z13-power setup-undervolt  (installs this kernel's -headers "
+                "and ryzen_smu-dkms-git).")
+        else:
+            self.uv_note.setText(
+                "All-core Curve Optimizer (0 to -40 mV). "
+                "Re-applied at login and after every profile switch.")
 
     def apply_panel(self):
         nxt = not self.panel.isChecked()
         val = "1" if nxt else "0"
-        r = z13ctl(["paneloverdrive", "--set", val])
-        ok = r is not None and r.returncode == 0
+        ok = _write_sysfs(os.path.join(ASUS_WMI, "panel_od"), val)
+        if not ok:
+            r = z13ctl(["paneloverdrive", "--set", val])
+            ok = r is not None and r.returncode == 0
         if ok:
             self.panel.setChecked(nxt)
         self.msg.set_result(ok, "Panel overdrive updated." if ok else
@@ -649,8 +890,10 @@ class PowerTab(QWidget):
     def apply_boot(self):
         nxt = not self.boot.isChecked()
         val = "1" if nxt else "0"
-        r = z13ctl(["bootsound", "--set", val])
-        ok = r is not None and r.returncode == 0
+        ok = _write_sysfs(os.path.join(ASUS_WMI, "boot_sound"), val)
+        if not ok:
+            r = z13ctl(["bootsound", "--set", val])
+            ok = r is not None and r.returncode == 0
         if ok:
             self.boot.setChecked(nxt)
         self.msg.set_result(ok, "Boot sound updated." if ok else
@@ -686,13 +929,57 @@ class TelemetryTab(QWidget):
         super().hideEvent(event)
 
     def refresh(self):
-        st = z13_status()
-        mapping = {"APU temperature": "APU", "Fans": "Fans",
-                   "Profile": "Profile", "Power": "Power",
-                   "TDP": "TDP", "Battery": "Battery"}
-        for key, src in mapping.items():
-            if src in st:
-                self.fields[key].set_value(st[src])
+        k10 = _hwmon_path("k10temp")
+        if k10:
+            raw = _read_sysfs(os.path.join(k10, "temp1_input"))
+            try:
+                self.fields["APU temperature"].set_value(
+                    "%d°C" % (int(raw) // 1000))
+            except (TypeError, ValueError):
+                pass
+        asus = _hwmon_path("asus")
+        rpm = []
+        if asus:
+            for i in (1, 2):
+                raw = _read_sysfs(os.path.join(asus, "fan%d_input" % i))
+                try:
+                    rpm.append(int(raw))
+                except (TypeError, ValueError):
+                    pass
+        curve = _hwmon_path("asus_custom_fan_curve")
+        enable = _read_sysfs(os.path.join(curve, "pwm1_enable")) if curve else None
+        mode = {"0": "full", "1": "custom", "2": "auto"}.get(enable or "", "")
+        if rpm:
+            extra = (", mode: %s" % mode) if mode else ""
+            self.fields["Fans"].set_value("%d RPM%s" % (max(rpm), extra))
+        st = read_status_file()
+        profile = st.get("profile") or _read_sysfs(
+            "/sys/firmware/acpi/platform_profile")
+        if profile:
+            self.fields["Profile"].set_value(str(profile))
+        if st.get("ac") is True:
+            self.fields["Power"].set_value("AC")
+        elif st.get("ac") is False:
+            self.fields["Power"].set_value("battery")
+        else:
+            online = _read_sysfs("/sys/class/power_supply/AC0/online")
+            if online is not None:
+                self.fields["Power"].set_value(
+                    "AC" if online == "1" else "battery")
+        tdp = st.get("tdp")
+        if tdp in (None, ""):
+            tdp = tdp_pl1() or None
+        if tdp not in (None, "", 0):
+            self.fields["TDP"].set_value("%sW" % tdp)
+        cap = st.get("capacity")
+        if cap is None:
+            raw = _read_sysfs(BAT_CAPACITY_PATH)
+            try:
+                cap = int(raw)
+            except (TypeError, ValueError):
+                cap = None
+        if cap is not None:
+            self.fields["Battery"].set_value("%s%%" % cap)
 
 
 class ConfigTab(QWidget):
@@ -746,7 +1033,12 @@ class ConfigTab(QWidget):
         self.msg = T.StatusLine(theme)
         v.addWidget(self.msg)
         v.addStretch(1)
-        self.refresh()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_loaded", False):
+            self._loaded = True
+            self.refresh()
 
     def refresh(self):
         cfg = load_service_config()
@@ -784,6 +1076,25 @@ class ConfigTab(QWidget):
             self.msg.set_result(False, f"Config: {CONFIG_PATH}")
 
 
+class _LazyPage(QWidget):
+    """Build a settings tab on first show so opening the window stays cheap."""
+
+    def __init__(self, factory, parent=None):
+        super().__init__(parent)
+        self._factory = factory
+        self._inner = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self._lay = lay
+
+    def showEvent(self, event):
+        if self._inner is None:
+            self._inner = self._factory()
+            self._lay.addWidget(self._inner)
+        super().showEvent(event)
+
+
 class SettingsWindow(QMainWindow):
     def __init__(self, theme):
         super().__init__()
@@ -811,12 +1122,12 @@ class SettingsWindow(QMainWindow):
         self.nav_items = []
         self.stack = QStackedWidget()
         pages = [
-            ("lighting", LightingTab(theme)),
-            ("fan", FanTab(theme)),
-            ("battery", BatteryTab(theme)),
-            ("power", PowerTab(theme)),
-            ("profiles", ConfigTab(theme)),
-            ("telemetry", TelemetryTab(theme)),
+            ("lighting", lambda: LightingTab(self.theme)),
+            ("fan", lambda: FanTab(self.theme)),
+            ("battery", lambda: BatteryTab(self.theme)),
+            ("power", lambda: PowerTab(self.theme)),
+            ("profiles", lambda: ConfigTab(self.theme)),
+            ("telemetry", lambda: TelemetryTab(self.theme)),
         ]
         self.pages = {}
         for i, (_key, label, glyph) in enumerate(NAV):
@@ -824,9 +1135,10 @@ class SettingsWindow(QMainWindow):
             item.clicked.connect(lambda _c=False, idx=i: self.stack.setCurrentIndex(idx))
             nav.addWidget(item)
             self.nav_items.append(item)
-        for key, widget in pages:
-            self.pages[key] = widget
-            self.stack.addWidget(self._scroll(widget))
+        for key, factory in pages:
+            wrap = _LazyPage(factory)
+            self.pages[key] = wrap
+            self.stack.addWidget(self._scroll(wrap))
         if self.nav_items:
             self.nav_items[0].setChecked(True)
         nav.addStretch(1)

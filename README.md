@@ -1,5 +1,8 @@
 # ROG Flow Z13 — Power Management
 
+> **[What’s new →](CHANGELOG.md)** Tweaks undervolt · silicon lottery · charge
+> cap that survives reboot · **~99% less idle work** (~81 ms/min → ~0.6 ms/min).
+
 Automated power profile switching for the **2025 ASUS ROG Flow Z13 (GZ302)**.
 Plug in → performance mode. Unplug → balanced. Low battery → silent.
 Undervolt and TDP power limits ride along automatically.
@@ -61,7 +64,12 @@ language as the tray flyout — instead of a stock Qt tab dialog:
   reset to firmware auto (75 W PL1 safety rules enforced).
 - **Battery** — charge limit slider (40–100%). Saved in `battery.conf` and
   re-applied at login (the ACPI cap does not survive reboot).
-- **Tweaks** — panel overdrive and boot sound toggles.
+- **Tweaks** — panel overdrive, boot sound, and a CPU undervolt slider
+  (Curve Optimizer, 0 to -40 mV). Saved in `tweaks.conf` and re-applied
+  at login and after every profile switch. A silicon-lottery score
+  (50–99) sits next to it with a suggested starting undervolt; best and
+  weakest cores use the same scale. Derived from AMD preferred-core
+  rankings, not ASUS BIOS SP.
 - **Profiles** — which mode runs on AC / battery / low battery and the
   low-battery threshold, written back to `service.conf`; "Open config file…"
   exposes the raw file for per-mode TDP / fan curve / undervolt tuning.
@@ -81,8 +89,12 @@ only supports AC/battery.
   via an SNI/dbusmenu item; KDE/X11 don't use it)
 - KDE Plasma is not required — the tray service is plain Qt and works on any
   desktop. See [Desktop environments](#desktop-environments) below.
-- `ryzen_smu` kernel module (optional — needed only for undervolt; without it
-  `z13-power` warns and skips the undervolt step)
+- `ryzen_smu-dkms-git` (amkillam fork) — **required for the Tweaks undervolt
+  slider**. Paru installs it as a dependency of `z13-power-git`. It is a
+  DKMS kernel module (not baked into this repo): it must rebuild against
+  your running kernel, so install the matching `-headers` package
+  (e.g. `linux-cachyos-bore-headers`). Without it, the slider still saves
+  and reapplies once the module is loaded.
 - AUR conflicts: if you already run a `z13ctl` variant (e.g. `z13ctl-plus-bin`),
   pacman will offer to swap it for `z13ctl-bin` — that's expected and safe.
   `z13gui-bin` is no longer needed: remove it with `paru -Rns z13gui-bin`.
@@ -141,6 +153,15 @@ z13-power status
 `z13-power diagnose` checks hardware, permissions, the daemon, and modules,
 and tells you exactly what to fix if anything's wrong (on a fresh machine
 that's usually: `sudo z13ctl setup`, then re-login for the `users` group).
+
+Want the Tweaks undervolt slider live on **this** kernel?
+
+```bash
+z13-power setup-undervolt
+```
+
+That installs the matching `-headers` package plus `ryzen_smu-dkms-git`
+(amkillam, rebuilds via DKMS — nothing prebuilt in this repo).
 
 A tray icon should appear — click it to switch profiles manually.
 
@@ -228,14 +249,17 @@ automatically every ~30s — no service restart needed.
 ## Project layout
 
 ```
+├── CHANGELOG.md            # what's new — features, compatibility, numbers
 ├── install.sh              # from-source installer (deps, units, config deploy)
 ├── scripts/
-│   └── z13-power           # the mode CLI: 6 modes + settings in one script
+│   └── z13-power           # the mode CLI: 6 modes + settings + setup-undervolt
 ├── service/
 │   ├── z13-power-service   # tray icon + power profile watcher (PyQt6)
-│   ├── z13-power-settings  # settings window: RGB, fan curve, battery, power
+│   ├── z13-power-settings  # settings window: RGB, fan curve, battery, Tweaks
 │   └── z13-power-service.service   # systemd user unit
 ├── contrib/
+│   ├── omarchy/            # Z13PowerPanel.qml flyout
+│   ├── ryzen-smu/          # udev + modules-load for Curve Optimizer
 │   └── z13-power-config    # packaged helper: deploys KDE Plasma display settings
 ├── kde/
 │   └── powerdevilrc        # display/DPMS-only PowerDevil template (KDE only)

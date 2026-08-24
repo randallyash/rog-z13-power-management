@@ -1,0 +1,4 @@
+# z13-power: let the user session (z13ctl daemon) talk to the SMU.
+# Kernel module sysfs is root-writable by default; without this, undervolt
+# probes fail with permission denied and z13ctl caches CO as unavailable.
+ACTION=="add", SUBSYSTEM=="module", KERNEL=="ryzen_smu", RUN+="/bin/sh -c 'chmod a+w /sys/kernel/ryzen_smu_drv/smu_args /sys/kernel/ryzen_smu_drv/rsmu_cmd /sys/kernel/ryzen_smu_drv/mp1_smu_cmd /sys/kernel/ryzen_smu_drv/hsmp_smu_cmd /sys/kernel/ryzen_smu_drv/smn'"
