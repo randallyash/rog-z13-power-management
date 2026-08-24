@@ -1859,7 +1859,7 @@ class Service:
         self.set_automatic(announce=True)
         self.evaluate_power()
 
-    def set_automatic(self, announce=False):
+    def set_automatic(self, announce=False, refresh=True):
         changed = not self.automatic
         self.automatic = True
         self.manual_mode = None
@@ -1869,8 +1869,9 @@ class Service:
             self.lock_action.setChecked(False)
             self.lock_action.setEnabled(False)
             self.lock_action.blockSignals(False)
-        self.update_menu_checks()
-        self.update_tray()
+        if refresh:
+            self.update_menu_checks()
+            self.update_tray()
         if announce and changed:
             notify("Power profile", "Automatic (per power state)")
 
@@ -1900,7 +1901,7 @@ class Service:
                 self.ac_probe_count = 0
                 if not self.automatic and not self.locked:
                     # An unlocked manual pick clears on power-source change.
-                    self.set_automatic()
+                    self.set_automatic(refresh=False)
         else:
             self.ac_probe = ac
             self.ac_probe_count = 0
@@ -1919,6 +1920,9 @@ class Service:
             mode = self.cfg["on_ac"] if ac else self.cfg["on_battery"]
             if mode != self._last_applied:
                 self.apply(mode)
+            else:
+                self.update_menu_checks()
+                self.update_tray()
         elif self.manual_mode and self.manual_mode != self._last_applied:
             self.apply(self.manual_mode, force=True)
 
@@ -1961,20 +1965,33 @@ class Service:
                 a.setChecked(False)
             self.group.setExclusive(True)
 
+    def _ui_mode(self):
+        """Mode the tray/flyout show — what we last applied, not a stale pick."""
+        if self._last_applied in MODE_ORDER:
+            return self._last_applied
+        if self.manual_mode in MODE_ORDER:
+            return self.manual_mode
+        return "performance"
+
     def update_tray(self):
-        mode = self.manual_mode if not self.automatic else (self._last_applied or "performance")
+        mode = self._ui_mode()
         color = MODE_COLORS.get(mode, "#b9b9c4")
         state = "automatic" if self.automatic else ("locked" if self.locked else "manual")
         label = MODES.get(mode, mode)
         self.write_status(mode)
-        if color != self._tray_color:
+        tip = f"z13-power: {label} ({state})"
+        icon_changed = color != self._tray_color
+        tip_changed = tip != self._tray_tip
+        if icon_changed:
             self._tray_color = color
             if self.sni is not None:
                 self.sni.set_icon(make_pixmap(color))
             else:
                 self.tray.setIcon(make_icon(color))
-        tip = f"z13-power: {label} ({state})"
-        if tip != self._tray_tip:
+        elif self.sni is not None:
+            # Hosts sometimes miss NewIcon after the first pixmap.
+            self.sni.set_icon(make_pixmap(color))
+        if tip_changed:
             self._tray_tip = tip
             if self.sni is not None:
                 self.sni.set_tooltip(tip)
@@ -2007,7 +2024,7 @@ class Service:
         self.locked = bool(data.get("locked"))
 
     def write_status(self, mode=None):
-        mode = mode or (self.manual_mode if not self.automatic else (self._last_applied or "performance"))
+        mode = mode if mode in MODE_ORDER else self._ui_mode()
         ac, capacity = read_power()
         payload = {
             "mode": mode,
@@ -2024,10 +2041,17 @@ class Service:
         self._status_payload = payload
         try:
             os.makedirs(STATE_DIR, exist_ok=True)
-            tmp = STATUS_PATH + ".tmp"
-            with open(tmp, "w") as fh:
-                json.dump(payload, fh)
-            os.replace(tmp, STATUS_PATH)
+            text = json.dumps(payload) + "\n"
+            # Truncate the existing inode so QML FileView keeps its watch.
+            # os.replace() of a tmp file drops inotify and freezes the flyout.
+            flags = os.O_WRONLY | os.O_CREAT
+            fd = os.open(STATUS_PATH, flags, 0o644)
+            try:
+                os.write(fd, text.encode("utf-8"))
+                os.ftruncate(fd, len(text.encode("utf-8")))
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         except OSError:
             pass
 
@@ -2143,15 +2167,23 @@ class Service:
                 expected = mode_def.get("profile")
         self.last_fw_profile = fw
         if expected and fw == expected:
+            self.last_profile = fw
             return
-        # Firmware profile changed outside this service (overlay, terminal, button).
+        # Something else wrote platform_profile (DE power panel, z13ctl, …).
+        if self.automatic or self.locked:
+            prev = self._last_applied
+            if self.automatic:
+                self.evaluate_power()
+            elif self.manual_mode:
+                self.apply(self.manual_mode, force=True)
+            if self._last_applied == prev:
+                notify(
+                    "Power profile",
+                    "Desktop changed the firmware profile; z13-power kept %s"
+                    % MODES.get(prev, prev or fw),
+                )
+            return
         self.last_profile = fw
-        if not self.locked:
-            self.automatic = False
-            if self.sni is not None:
-                self.sni.set_state(self.automatic, self.manual_mode, self.locked)
-            else:
-                self.lock_action.setEnabled(True)
         self.update_menu_checks()
         self.update_tray()
         notify("Power profile changed", f"Now: {fw} (set externally)")

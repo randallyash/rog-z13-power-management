@@ -119,6 +119,13 @@ Column {
     }
   }
 
+  Timer {
+    interval: 1000
+    running: root.visible
+    repeat: true
+    onTriggered: statusFile.reload()
+  }
+
   Component.onCompleted: statusFile.reload()
   onVisibleChanged: if (visible) statusFile.reload()
 
