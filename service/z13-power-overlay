@@ -1,0 +1,327 @@
+#!/usr/bin/env python3
+#
+# z13-power-overlay — slim profile picker for nested gamescope.
+#
+# The full settings window SIGSEGVs on gamescope's Xwayland if we talk to
+# libX11 from inside the Qt process. This UI is small, uses xcb, and tags
+# itself as a Steam overlay via `xprop` in a child process.
+#
+# GAMESCOPE_EXTERNAL_OVERLAY is paint-only (mangoapp). Gamescope only
+# routes mouse/keyboard to STEAM_OVERLAY windows with STEAM_INPUT_FOCUS.
+# Setting both atoms composites the same window twice. The window is
+# fullscreen so STEAM_OVERLAY does not stretch a small panel, with the
+# picker card centered on a transparent root.
+#
+# Usage:  DISPLAY=:1 WAYLAND_DISPLAY= QT_QPA_PLATFORM=xcb Z13_GAMESCOPE=1 \
+#           z13-power-overlay
+
+import fcntl
+import json
+import os
+import subprocess
+import sys
+
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QColor, QFont, QPalette
+from PyQt6.QtWidgets import (
+    QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+)
+
+STATE_DIR = os.path.expanduser("~/.local/state/z13-power")
+STATUS_PATH = os.path.join(STATE_DIR, "status.json")
+COMMAND_PATH = os.path.join(STATE_DIR, "command.json")
+
+MODES = [
+    ("max", "Max"),
+    ("performance", "Perf"),
+    ("balanced", "Mid"),
+    ("silent", "Silent"),
+    ("lowpower", "Low"),
+]
+
+FALLBACK = {
+    "accent": "#81a1c1",
+    "selection": "#434c5e",
+    "muted": "#4c566a",
+    "background": "#2e3440",
+    "dark_background": "#1a1d24",
+    "lighter_background": "#3b4252",
+    "foreground": "#d8dee9",
+    "control_border": "#4c566a",
+}
+
+
+def load_colors():
+    t = dict(FALLBACK)
+    here = os.path.dirname(os.path.realpath(__file__))
+    for path in (here, "/usr/share/z13-power-management",
+                 os.path.expanduser("~/.local/bin")):
+        if os.path.isfile(os.path.join(path, "z13_power_theme.py")):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+            break
+    try:
+        import z13_power_theme
+        live = z13_power_theme.load_theme()
+        for key in t:
+            if key in live and str(live[key]).startswith("#"):
+                t[key] = live[key]
+    except Exception:
+        pass
+    return t
+
+
+def send(op, extra=None):
+    payload = dict(extra or {})
+    payload["op"] = op
+    os.makedirs(STATE_DIR, exist_ok=True)
+    tmp = COMMAND_PATH + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(payload, fh)
+        fh.write("\n")
+    os.replace(tmp, COMMAND_PATH)
+
+
+def read_status():
+    try:
+        with open(STATUS_PATH, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def _xid(window):
+    try:
+        return int(window.winId())
+    except (TypeError, ValueError):
+        return None
+
+
+def mark_gamescope_overlay(window):
+    if os.environ.get("Z13_GAMESCOPE") != "1":
+        return
+    if QApplication.instance().platformName() != "xcb":
+        return
+    xid = _xid(window)
+    if xid is None:
+        return
+    # STEAM_OVERLAY + STEAM_INPUT_FOCUS only. EXTERNAL is click-through.
+    for atom in ("STEAM_OVERLAY", "STEAM_INPUT_FOCUS"):
+        try:
+            subprocess.run(
+                ["xprop", "-id", str(xid), "-f", atom, "32c", "-set", atom, "1"],
+                capture_output=True, timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return
+
+
+def nudge_gamescope_focus(window):
+    xid = _xid(window)
+    if xid is None:
+        return
+    for args in (
+        ["xdotool", "windowfocus", "--sync", str(xid)],
+        ["xdotool", "windowactivate", str(xid)],
+    ):
+        try:
+            subprocess.run(args, capture_output=True, timeout=2)
+        except (OSError, subprocess.SubprocessError):
+            return
+
+
+class Overlay(QWidget):
+    def __init__(self, theme):
+        super().__init__()
+        self.theme = theme
+        self.setWindowTitle("z13-power-overlay")
+        self.setObjectName("root")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        pal = self.palette()
+        pal.setColor(QPalette.ColorRole.Window, QColor(0, 0, 0, 0))
+        self.setPalette(pal)
+        self.setAutoFillBackground(False)
+
+        screen = QApplication.instance().primaryScreen()
+        if screen is not None:
+            self.setGeometry(screen.geometry())
+        else:
+            self.resize(1920, 1080)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addStretch(1)
+
+        self.card = QWidget()
+        self.card.setObjectName("panel")
+        self.card.setFixedSize(720, 196)
+
+        card = QVBoxLayout(self.card)
+        card.setContentsMargins(22, 18, 22, 16)
+        card.setSpacing(14)
+
+        self.kicker = QLabel("POWER")
+        self.kicker.setObjectName("kicker")
+        self.hero = QLabel("—")
+        self.hero.setObjectName("hero")
+        self.meta = QLabel("")
+        self.meta.setObjectName("meta")
+
+        head = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        titles.addWidget(self.kicker)
+        titles.addWidget(self.hero)
+        head.addLayout(titles, 1)
+        head.addWidget(self.meta, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        card.addLayout(head)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.buttons = {}
+        for mode, label in MODES:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(46)
+            btn.clicked.connect(lambda _c=False, m=mode: self.pick(m))
+            row.addWidget(btn)
+            self.buttons[mode] = btn
+        card.addLayout(row)
+
+        self.hint = QLabel("Click a profile · Armory or Esc to close")
+        self.hint.setObjectName("hint")
+        self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card.addWidget(self.hint)
+
+        root.addWidget(self.card, 0, Qt.AlignmentFlag.AlignHCenter)
+        root.addStretch(1)
+
+        self._apply_style()
+        self.refresh()
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start(1000)
+
+    def _apply_style(self):
+        t = self.theme
+        muted = QColor(t["foreground"])
+        muted.setAlphaF(0.55)
+        self.setStyleSheet(f"""
+            Overlay#root {{
+                background: transparent;
+            }}
+            QWidget#panel {{
+                background: {t["dark_background"]};
+                border: 1px solid {t["control_border"]};
+                border-radius: 16px;
+            }}
+            QLabel {{
+                background: transparent;
+                color: {t["foreground"]};
+            }}
+            QLabel#kicker {{
+                color: {muted.name(QColor.NameFormat.HexArgb)};
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 1.4px;
+            }}
+            QLabel#hero {{
+                font-size: 22px;
+                font-weight: 700;
+            }}
+            QLabel#meta {{
+                color: {t["foreground"]};
+                font-size: 20px;
+                font-weight: 700;
+            }}
+            QLabel#hint {{
+                color: {muted.name(QColor.NameFormat.HexArgb)};
+                font-size: 12px;
+            }}
+            QPushButton {{
+                background: {t["lighter_background"]};
+                color: {t["foreground"]};
+                border: 1px solid {t["control_border"]};
+                border-radius: 10px;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 8px 6px;
+            }}
+            QPushButton:hover {{
+                border-color: {t["accent"]};
+            }}
+            QPushButton:checked {{
+                background: {t["selection"]};
+                border: 2px solid {t["accent"]};
+                color: {t["foreground"]};
+            }}
+        """)
+
+    def pick(self, mode):
+        send("mode", {"mode": mode})
+        QTimer.singleShot(150, self.refresh)
+
+    def refresh(self):
+        st = read_status()
+        mode = str(st.get("mode") or "")
+        label = st.get("label") or mode or "—"
+        tdp = st.get("tdp")
+        auto = st.get("automatic") is True
+        self.hero.setText("%s · %s" % (label, "Auto" if auto else "Manual"))
+        self.meta.setText("" if tdp in (None, "") else "%sW" % tdp)
+        for key, btn in self.buttons.items():
+            btn.setChecked(key == mode)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            QApplication.instance().quit()
+            return
+        super().keyPressEvent(event)
+
+    def mousePressEvent(self, event):
+        if self.card.geometry().contains(event.position().toPoint()):
+            super().mousePressEvent(event)
+            return
+        QApplication.instance().quit()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        mark_gamescope_overlay(self)
+        self.raise_()
+        self.activateWindow()
+        self.setFocus()
+        QTimer.singleShot(50, lambda: mark_gamescope_overlay(self))
+        QTimer.singleShot(80, lambda: nudge_gamescope_focus(self))
+
+
+def main():
+    os.makedirs(STATE_DIR, exist_ok=True)
+    lock_path = os.path.join(STATE_DIR, "overlay.lock")
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return 0
+
+    app = QApplication(sys.argv)
+    app.setApplicationName("z13-power-overlay")
+    app.setQuitOnLastWindowClosed(True)
+    app.setStyle("Fusion")
+    app.setFont(QFont("Sans Serif", 11))
+    win = Overlay(load_colors())
+    # Tag before map so gamescope never treats this as a new game window.
+    win.winId()
+    mark_gamescope_overlay(win)
+    win.show()
+    win.raise_()
+    win.activateWindow()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

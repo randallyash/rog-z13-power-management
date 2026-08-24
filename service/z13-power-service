@@ -14,6 +14,7 @@
 #     forces the safety profile, then restores your locked pick)
 #   - "Settings…": opens the settings window; its Profiles tab edits the
 #     service config ("Open config file…" exposes the raw file)
+#   - Armoury Crate button (KEY_PROG3 via z13ctl gui-toggle): toggle settings
 #   - re-applies saved lighting and charge limit at login
 #   - notifies (notify-send) on every switch and on external profile changes
 #
@@ -30,8 +31,11 @@ import grp
 import json
 import os
 import shutil
+import socket
+import signal as posix_signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -681,6 +685,425 @@ def desktop_needs_sni():
     return "kde" not in os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
 
+def z13ctl_socket_path():
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    return os.path.join(runtime, "z13ctl", "z13ctl.sock")
+
+
+def _proc_comm(pid):
+    try:
+        with open(os.path.join("/proc", str(pid), "comm")) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def _proc_environ(pid):
+    out = {}
+    try:
+        with open(os.path.join("/proc", str(pid), "environ"), "rb") as fh:
+            chunks = fh.read().split(b"\0")
+    except OSError:
+        return out
+    for item in chunks:
+        if b"=" not in item:
+            continue
+        key, _, val = item.partition(b"=")
+        out[key.decode("utf-8", "replace")] = val.decode("utf-8", "replace")
+    return out
+
+
+def _proc_children(pid):
+    kids = []
+    try:
+        tasks = os.listdir(os.path.join("/proc", str(pid), "task"))
+    except OSError:
+        return kids
+    for tid in tasks:
+        try:
+            with open(os.path.join("/proc", str(pid), "task", tid, "children")) as fh:
+                kids.extend(int(x) for x in fh.read().split())
+        except OSError:
+            continue
+    return kids
+
+
+def gamescope_xdisplay():
+    """Nested gamescope Xwayland DISPLAY, or None."""
+    host = os.environ.get("DISPLAY")
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return None
+    roots = []
+    for name in names:
+        if not name.isdigit():
+            continue
+        if _proc_comm(name) in ("gamescope", "gamescope-wl"):
+            roots.append(int(name))
+    for root in roots:
+        stack = [root]
+        seen = set()
+        while stack:
+            pid = stack.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            display = _proc_environ(pid).get("DISPLAY")
+            if display and display != host and display.startswith(":"):
+                num = display.split(".", 1)[0].lstrip(":")
+                if num.isdigit() and os.path.exists("/tmp/.X11-unix/X%s" % num):
+                    return display
+            stack.extend(_proc_children(pid))
+    return None
+
+
+def panel_pids(*bins):
+    """PIDs whose argv basename is one of bins."""
+    want = set(bins)
+    pids = []
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return pids
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            with open(os.path.join("/proc", name, "cmdline"), "rb") as fh:
+                argv = [a.decode("utf-8", "replace") for a in fh.read().split(b"\0") if a]
+        except OSError:
+            continue
+        if any(os.path.basename(a) in want for a in argv):
+            pids.append(int(name))
+    return pids
+
+
+def settings_pids():
+    return panel_pids("z13-power-settings", "z13-power-overlay")
+
+
+def _kill_pids(pids):
+    for pid in pids:
+        try:
+            os.kill(pid, posix_signal.SIGTERM)
+        except OSError:
+            pass
+
+
+def _is_gamescope_class(value):
+    """True if a Hyprland class or X11 WM_CLASS names the gamescope window."""
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return False
+    parts = []
+    for chunk in raw.replace(",", " ").split():
+        token = chunk.strip().strip('"').strip("'")
+        if token:
+            parts.append(token)
+    return any(p == "gamescope" or p.startswith("gamescope") for p in parts)
+
+
+def _hyprland_active_class():
+    """Focused window class, or None if Hyprland is not answering."""
+    hyprctl = shutil.which("hyprctl") or "/usr/bin/hyprctl"
+    if not os.path.isfile(hyprctl) or not os.access(hyprctl, os.X_OK):
+        return None
+    try:
+        r = subprocess.run(
+            [hyprctl, "activewindow", "-j"],
+            capture_output=True, text=True, timeout=1,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    try:
+        data = json.loads(r.stdout)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return str(data.get("class") or "")
+
+
+def _x11_active_wm_class():
+    """EWMH focused window WM_CLASS on the host DISPLAY."""
+    display = os.environ.get("DISPLAY")
+    if not display:
+        return ""
+    xprop = shutil.which("xprop") or "/usr/bin/xprop"
+    try:
+        root = subprocess.run(
+            [xprop, "-display", display, "-root", "_NET_ACTIVE_WINDOW"],
+            capture_output=True, text=True, timeout=1,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    xid = None
+    for tok in root.stdout.replace(",", " ").split():
+        if tok.lower().startswith("0x"):
+            xid = tok
+            break
+    if not xid or xid.lower() in ("0x0", "0x00"):
+        return ""
+    try:
+        cls = subprocess.run(
+            [xprop, "-display", display, "-id", xid, "WM_CLASS"],
+            capture_output=True, text=True, timeout=1,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return cls.stdout
+
+
+def _kwin_available():
+    """True when org.kde.KWin is on the session bus."""
+    gdbus = shutil.which("gdbus")
+    if gdbus:
+        try:
+            r = subprocess.run(
+                [gdbus, "call", "--session",
+                 "--dest", "org.freedesktop.DBus",
+                 "--object-path", "/org/freedesktop/DBus",
+                 "--method", "org.freedesktop.DBus.NameHasOwner",
+                 "org.kde.KWin"],
+                capture_output=True, text=True, timeout=1,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return r.returncode == 0 and "true" in r.stdout.lower()
+    try:
+        r = subprocess.run(
+            ["busctl", "--user", "status", "org.kde.KWin"],
+            capture_output=True, text=True, timeout=1,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
+
+
+def _kdotool_active_class():
+    exe = shutil.which("kdotool")
+    if not exe:
+        return None
+    try:
+        r = subprocess.run(
+            [exe, "getactivewindow", "getwindowclassname"],
+            capture_output=True, text=True, timeout=1,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return r.stdout.strip()
+
+
+def _gdbus_call(path, method, *args, timeout=1):
+    cmd = [
+        "gdbus", "call", "--session",
+        "--dest", "org.kde.KWin",
+        "--object-path", path,
+        "--method", method,
+    ]
+    cmd.extend(args)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def _kwin_script_active_class():
+    """Ask KWin for workspace.activeWindow.resourceClass via a one-shot script."""
+    if not _DBUS_NEXT_OK:
+        return None
+    gdbus = shutil.which("gdbus")
+    if not gdbus:
+        return None
+
+    async def _probe():
+        bus = await MessageBus().connect()
+        future = asyncio.get_running_loop().create_future()
+
+        class Probe(ServiceInterface):
+            def __init__(self):
+                super().__init__("local.z13power.kwinprobe")
+
+            @method()
+            def Result(self, text: "s") -> None:
+                if not future.done():
+                    future.set_result(str(text or ""))
+
+        bus.export("/z13", Probe())
+        dest = bus.unique_name
+        js = (
+            "(function(){\n"
+            "  var w = workspace.activeWindow;\n"
+            "  if (w === undefined || w === null) w = workspace.activeClient;\n"
+            "  var cls = w ? ('' + w.resourceClass) : '';\n"
+            "  callDBus('%s', '/z13', 'local.z13power.kwinprobe', 'Result', cls);\n"
+            "})();\n" % dest.replace("\\", "\\\\").replace("'", "\\'")
+        )
+        fd, path = tempfile.mkstemp(prefix="z13-power-kwin-", suffix=".js")
+        script_id = None
+        try:
+            os.write(fd, js.encode("utf-8"))
+            os.close(fd)
+            fd = None
+            try:
+                _gdbus_call(
+                    "/Scripting", "org.kde.kwin.Scripting.unloadScript",
+                    "z13-power-focus", timeout=1,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
+            loaded = _gdbus_call(
+                "/Scripting", "org.kde.kwin.Scripting.loadScript",
+                path, "z13-power-focus", timeout=1,
+            )
+            if loaded.returncode != 0:
+                loaded = _gdbus_call(
+                    "/Scripting", "org.kde.kwin.Scripting.loadScript",
+                    path, timeout=1,
+                )
+            if loaded.returncode != 0:
+                return None
+            digits = "".join(c for c in loaded.stdout if c.isdigit() or c == "-")
+            if not digits or int(digits) < 0:
+                return None
+            script_id = str(int(digits))
+            _gdbus_call(
+                "/Scripting/Script" + script_id,
+                "org.kde.kwin.Script.run", timeout=1,
+            )
+            return await asyncio.wait_for(future, 1.0)
+        finally:
+            if script_id:
+                try:
+                    _gdbus_call(
+                        "/Scripting/Script" + script_id,
+                        "org.kde.kwin.Script.stop", timeout=1,
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            try:
+                _gdbus_call(
+                    "/Scripting", "org.kde.kwin.Scripting.unloadScript",
+                    "z13-power-focus", timeout=1,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            try:
+                bus.disconnect()
+            except Exception:
+                pass
+
+    try:
+        return asyncio.run(_probe())
+    except Exception:
+        return None
+
+
+def _plasma_active_class():
+    """Focused window class from KWin, or None if KWin is not in charge.
+
+    Plasma Wayland has no EWMH active window. Prefer kdotool; otherwise a
+    one-shot KWin script (same trick kdotool uses).
+    """
+    if not _kwin_available():
+        return None
+    cls = _kdotool_active_class()
+    if cls is not None:
+        return cls
+    cls = _kwin_script_active_class()
+    if cls is not None:
+        return cls
+    return ""
+
+
+def gamescope_host_focused():
+    """True when the nested gamescope session is the focused host window.
+
+    Hyprland (Omarchy): hyprctl activewindow class.
+    Plasma Wayland: KWin (kdotool or a one-shot script).
+    X11 (CachyOS KDE/i3/xfce, …): EWMH _NET_ACTIVE_WINDOW WM_CLASS.
+    First compositor that answers wins — Xwayland leftovers must not steal
+    the decision while a Wayland app is focused.
+    """
+    hypr = _hyprland_active_class()
+    if hypr is not None:
+        return _is_gamescope_class(hypr)
+    plasma = _plasma_active_class()
+    if plasma is not None:
+        return _is_gamescope_class(plasma)
+    return _is_gamescope_class(_x11_active_wm_class())
+
+
+class ButtonWatcher(QThread):
+    """Subscribe to z13ctl's Armoury Crate button (gui-toggle / KEY_PROG3).
+
+    The daemon already grabs the key; Hyprland never sees it. We listen on
+    the same Unix socket z13gui used. Reconnects if the daemon restarts.
+    """
+
+    pressed = pyqtSignal()
+
+    def run(self):
+        while not self.isInterruptionRequested():
+            if not self._listen_once():
+                self.msleep(2000)
+
+    def _listen_once(self):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(2)
+            sock.connect(z13ctl_socket_path())
+            sock.sendall(b'{"cmd":"subscribe","events":["gui-toggle"]}\n')
+            buf = b""
+            while b"\n" not in buf:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    return False
+                buf += chunk
+            line, buf = buf.split(b"\n", 1)
+            ack = json.loads(line.decode())
+            if not ack.get("ok"):
+                return False
+            sock.settimeout(1.0)
+            while not self.isInterruptionRequested():
+                try:
+                    chunk = sock.recv(4096)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    return True
+                buf += chunk
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw.decode())
+                    except ValueError:
+                        continue
+                    if ev.get("event") == "gui-toggle":
+                        self.pressed.emit()
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+        return True
+
+
 class PowerMonitor(QThread):
     """Watches udev power_supply events and re-emits them on the Qt thread."""
 
@@ -1207,6 +1630,11 @@ class Service:
         self.monitor.event.connect(self.on_power_event)
         self.monitor.start()
 
+        self._gui_toggle_at = 0.0
+        self.button_watch = ButtonWatcher()
+        self.button_watch.pressed.connect(self.toggle_settings)
+        self.button_watch.start()
+
         # Sysfs poll for firmware profile changes made outside this service.
         self.poll_timer = QTimer()
         self.poll_timer.timeout.connect(self.on_poll)
@@ -1637,8 +2065,57 @@ class Service:
                 locked = not self.locked
             if not self.automatic:
                 self.on_lock_toggled(bool(locked))
+        elif op == "settings":
+            self.toggle_settings()
+        elif op == "settings-open":
+            self.open_settings()
+
+    def toggle_settings(self):
+        """Armoury Crate button: open, press again to close.
+
+        In a focused gamescope window (Hyprland, Plasma Wayland, or X11),
+        toggle the slim overlay on its nested Xwayland. On the desktop,
+        toggle full settings — even if a game is still running in the
+        background.
+        """
+        now = time.monotonic()
+        if now - self._gui_toggle_at < 0.08:
+            return
+        self._gui_toggle_at = now
+        if gamescope_xdisplay() and gamescope_host_focused():
+            pids = panel_pids("z13-power-overlay")
+            if pids:
+                _kill_pids(pids)
+                return
+            self._open_gamescope_overlay()
+            return
+        pids = panel_pids("z13-power-settings")
+        if pids:
+            _kill_pids(pids)
+            return
+        self.open_settings()
+
+    def _open_gamescope_overlay(self):
+        gs = gamescope_xdisplay()
+        if not gs:
+            return False
+        local = os.path.expanduser("~/.local/bin/z13-power-overlay")
+        cmd = local if os.access(local, os.X_OK) else "z13-power-overlay"
+        env = os.environ.copy()
+        env["DISPLAY"] = gs
+        env.pop("WAYLAND_DISPLAY", None)
+        env["QT_QPA_PLATFORM"] = "xcb"
+        env["Z13_GAMESCOPE"] = "1"
+        try:
+            subprocess.Popen([cmd], env=env)
+            return True
+        except OSError:
+            return False
 
     def open_settings(self):
+        """Tray / Settings… — always the host settings window."""
+        if panel_pids("z13-power-settings"):
+            return
         local = os.path.expanduser("~/.local/bin/z13-power-settings")
         cmd = local if os.access(local, os.X_OK) else "z13-power-settings"
         try:

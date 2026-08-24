@@ -27,6 +27,7 @@ GPL-3.0-or-later.
 - `scripts/z13-power` — mode CLI (applies profiles SILENTLY; no notifications)
 - `service/z13-power-service` — tray + watcher (PyQt6): the only notifier
 - `service/z13-power-settings` — settings window (PyQt6): z13gui replacement
+- `service/z13-power-overlay` — slim in-game profile picker for nested gamescope
 - `service/z13-power-service.service` — systemd user unit (graphical-session.target)
 - `contrib/z13-power-config` — deploys display-only powerdevilrc (KDE Plasma only;
   no-ops elsewhere)
@@ -181,8 +182,26 @@ clears on a live AC/battery change.
   Omarchy/Hyprland it's the bar's **Power panel** (switches profiles and
   remembers separate AC/battery choices). Both would fight the service — keep
   the service as the single switcher.
-- z13ctl daemon required for TDP/fancurve/undervolt persistence. Armoury Crate
-  button watcher (daemon) is manual, not a conflict.
+- z13ctl daemon required for TDP/fancurve/undervolt persistence. It also
+  watches the Armory Crate side button (KEY_PROG3) and emits `gui-toggle`
+  on its Unix socket. z13-power-service subscribes and **toggles** settings
+  or the gamescope overlay (press open, press again close). Do not also
+  bind that key in the compositor — the daemon already grabs it.
+  `--no-button` would disable the watcher and break this.
+- Nested gamescope: if the focused *host* window is gamescope, spawn
+  `z13-power-overlay` on the nested Xwayland (`QT_QPA_PLATFORM=xcb`,
+  `Z13_GAMESCOPE=1`). Tag with `xprop` in a child process: `STEAM_OVERLAY`
+  + `STEAM_INPUT_FOCUS` only (not `GAMESCOPE_EXTERNAL_OVERLAY` — that is
+  paint-only / mangoapp, and setting both composites the window twice).
+  Window is fullscreen transparent with a centered card so Steam overlay
+  scaling does not stretch a 720×196 panel. Never ctypes/libX11 from the
+  Qt process — that SIGSEGV'd settings in `XFlush`. Full settings stay on
+  the host compositor.
+- gamescope-focused detection: Hyprland `hyprctl activewindow` if it
+  answers; else KWin on Plasma Wayland (`kdotool` or a one-shot KWin
+  script via D-Bus); else X11 EWMH `_NET_ACTIVE_WINDOW` / `WM_CLASS`.
+  First compositor that answers wins so Xwayland leftovers cannot steal
+  the decision. Not gamescope-session / Deck gaming mode (no host window).
 - Notifications are the service's job — don't re-add notify() to z13-power or
   you get double popups.
 

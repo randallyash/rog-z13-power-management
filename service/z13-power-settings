@@ -1103,6 +1103,9 @@ class SettingsWindow(QMainWindow):
         self.setWindowTitle("z13-power-settings")
         self.resize(800, 660)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        # Stay above other windows (Hyprland also pins this via window rules
+        # so the Armoury Crate button can land on a fullscreen game).
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
 
         root = QWidget()
         outer = QVBoxLayout(root)

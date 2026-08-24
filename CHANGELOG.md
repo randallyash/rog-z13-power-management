@@ -1,12 +1,76 @@
 # What’s new in z13-power
 
-The Z13 tray that used to poke hardware twelve times a minute now sits quiet,
-remembers your charge cap and undervolt across reboot, and still looks like
-Omarchy. This is the drop.
+If you came from Windows, two things were missing on the Z13: the **Armory
+Crate button** did nothing, and there was no way to change power profiles
+**in a game** without alt-tabbing out of fullscreen.
+
+That is in this drop. So is a tray that used to poke the hardware twelve
+times a minute and now sits quiet, a charge cap and undervolt that survive
+reboot, and a Tweaks page that finally looks like G-Helper.
+
+This is for every GZ302 on Linux — **CachyOS, Arch, Omarchy, KDE Plasma,
+Hyprland, X11 or Wayland.** You do not need Omarchy. You do not need KDE.
+
+---
+
+## Armory Crate button
+
+The side button on the tablet (KEY_PROG3) used to open Armory Crate on
+Windows and **do nothing** on Linux. Press it now:
+
+- **On the desktop** — full settings open. Press again to close. The
+  window stays on top, including over a fullscreen game that is *not*
+  running inside gamescope.
+- **In a gamescope game** — a slim in-game profile picker: Max, Perf,
+  Mid, Silent, Low. Click a profile. Esc, click outside the card, or
+  Armory again to close. You never leave the game.
+
+Same path z13gui used: the `z13ctl` daemon already watches the key and
+emits `gui-toggle`. Do not bind that key in your compositor — the daemon
+already grabbed it.
+
+---
+
+## Gamescope — in-game overlay
+
+Steam, Lutris, Heroic, or a terminal `gamescope -- ./game`: if gamescope
+is the focused window, Armory puts a real overlay **inside** that nested
+session. Proton or native, one title or fifty — the game does not matter.
+Lootbound was only the test case.
+
+| Your desktop | Overlay when gamescope is focused |
+|---|---|
+| **Hyprland** (Omarchy, Cachy Hyprland, …) | yes |
+| **KDE Plasma Wayland** (CachyOS KDE, most “just install KDE” boxes) | yes |
+| **X11** (Plasma X11, i3, Xfce, Cinnamon, …) | yes |
+
+The picker is a Steam-style overlay (`STEAM_OVERLAY` + `STEAM_INPUT_FOCUS`)
+so gamescope actually gives it the mouse. A HUD-style tag
+(`GAMESCOPE_EXTERNAL_OVERLAY`, what MangoHud uses) **paints** on top and
+sends every click to the game — we do not use that. The window is a
+fullscreen transparent root with the card centered, so the compositor does
+not stretch a small panel across 1080p.
+
+Full settings are **not** opened on gamescope’s Xwayland: talking to
+libX11 from inside that Qt process SIGSEGV’d. Desktop settings stay on
+your host compositor. The tray **Settings…** item always opens the full
+window, even if a game is running in the background.
+
+Not this (and not a bug): **gamescope as the whole login session**
+(SteamOS / Bazzite *gaming mode*, `gamescope-session`). There the
+compositor *is* gamescope — there is no desktop window named gamescope
+to detect. Fullscreen gamescope **on** Hyprland or Plasma is the normal
+case and **is** supported.
+
+GNOME Wayland and Sway/niri are not wired yet. Two gamescope windows at
+once still pick the first nested display.
 
 ---
 
 ## The headline numbers
+
+The tray does **zero** `z13ctl` while nothing is changing. Plug/unplug is
+udev. Firmware profile is one sysfs read every 8 seconds.
 
 | | Then | Now |
 |--|------|-----|
@@ -23,14 +87,9 @@ Times are median wall-clock on a GZ302 (CachyOS + `z13ctl` + `ryzen_smu`).
 Your box will be in the same ballpark. Real profile changes still pay for
 TDP / fan / UV — skip-if-same only fires when you are already there.
 
-**The tray does zero `z13ctl` while nothing is changing.** Plug/unplug is
-udev. Firmware profile is one sysfs read every 8 seconds.
-
 ---
 
-## New features
-
-### Tweaks → CPU undervolt
+## Tweaks → CPU undervolt
 
 A G-Helper-style all-core **Curve Optimizer** slider, **0 to −40 mV**, on
 the Tweaks page.
@@ -48,21 +107,8 @@ Same page, same 50–99 scale for the overall score, **best core**, and
 **weakest core** — plus a suggested starting undervolt.
 
 This is AMD’s own preferred-core ranking (CPPC), not ASUS BIOS SP (we
-cannot read fused VID/FIT from userspace). On this unit: **77 / 100**
-(best 98 · weakest 54) → start around **−15 mV**.
-
-### Charge cap that survives reboot
-
-ACPI on the GZ302 **forgets** `charge_control_end_threshold` across reboot.
-**Set charge limit** writes `~/.config/z13-power/battery.conf`; the tray
-re-applies it at login, same as lighting. (Landed as PR #7; this drop
-makes the re-apply a sysfs write and skips it when the live cap already
-matches.)
-
-### Automatic stays how you left it
-
-Reboot no longer silently turns Automatic back on. Manual mode + lock come
-back from `status.json` before the tray rewrites it. (PR #6.)
+cannot read fused VID/FIT from userspace). Example unit: **77 / 100**
+(best 98 · weakest 54) → start around **−15 mV**. Yours will differ.
 
 ### One command to get undervolt working
 
@@ -80,17 +126,32 @@ kernel update.
 
 ---
 
+## Charge cap that survives reboot
+
+ACPI on the GZ302 **forgets** `charge_control_end_threshold` across reboot.
+**Set charge limit** writes `~/.config/z13-power/battery.conf`; the tray
+re-applies it at login, same as lighting. (PR #7; later drops made the
+re-apply a sysfs write and skip it when the live cap already matches.)
+
+## Automatic stays how you left it
+
+Reboot no longer silently turns Automatic back on. Manual mode + lock come
+back from `status.json` before the tray rewrites it. (PR #6.)
+
+---
+
 ## Compatibility
 
 | | |
 |--|--|
 | **Hardware** | 2025 ASUS ROG Flow Z13 **GZ302** (Strix Halo) |
 | **Distro** | Arch / CachyOS — any kernel with matching `-headers` |
-| **Desktop** | KDE Plasma, Hyprland / **Omarchy**, any SNI tray + `notify-send` |
-| **Theme** | Follows the live Omarchy theme (flyout + settings + tray bolt) |
-| **Undervolt** | Optional. Needs `ryzen_smu` for the running kernel. Without it, profiles / TDP / fans / lighting / charge cap still work |
+| **Desktop** | KDE Plasma (X11 + Wayland), Hyprland / Omarchy, X11 WMs with EWMH, any SNI tray + `notify-send` |
+| **Gamescope overlay** | Nested gamescope on Hyprland, Plasma Wayland, or X11. Steam / Lutris / Heroic / `gamescope --` |
+| **Theme** | Follows the live Omarchy theme when one is present (flyout + settings + tray bolt) |
+| **Undervolt** | Optional. Needs `ryzen_smu` for the running kernel. Without it, profiles / TDP / fans / lighting / charge cap / Armory still work |
 | **Kernels** | CachyOS (default, bore, LTS), linux-zen, linux-lts, stock `linux` — `setup-undervolt` picks the headers for **whatever `uname -r` is** |
-| **Not required** | KDE, PowerDevil Run Script hooks, z13gui, a baked kernel module |
+| **Not required** | KDE, PowerDevil Run Script hooks, z13gui, a baked kernel module, Omarchy |
 
 Conflicts to leave off: `z13ctl autoswitch`, and the desktop’s own AC/battery
 power profiles (KDE Power Management, Omarchy bar Power panel). This service
@@ -106,7 +167,7 @@ That is gone (PR #5). Idle is sysfs + udev. Config is parsed only when
 the file’s mtime changes. `status.json` is not rewritten if nothing
 changed. The bolt pixmap is cached.
 
-**This drop cuts the leftover duplicates:**
+**Leftover duplicates that this tree also cuts:**
 
 - Same TDP recipe already applied this process → skip `tdp --set` (~92 ms)
 - Fans already auto and we did not rewrite the firmware profile → skip
@@ -136,6 +197,7 @@ The Omarchy flyout was already cheap: `FileView` on `status.json`, no timer.
 | [#5](https://forgejo.fifthdread.com/Fifthdread/rog-z13-power-management/pulls/5) | Settings restyled like the flyout, live theme, **~99% less idle work** |
 | [#6](https://forgejo.fifthdread.com/Fifthdread/rog-z13-power-management/pulls/6) | Automatic-off survives reboot |
 | [#7](https://forgejo.fifthdread.com/Fifthdread/rog-z13-power-management/pulls/7) | Charge cap persisted in `battery.conf` |
+| [#8](https://forgejo.fifthdread.com/Fifthdread/rog-z13-power-management/pulls/8) | Tweaks undervolt, silicon lottery, skip-if-same apply path |
 
 ---
 

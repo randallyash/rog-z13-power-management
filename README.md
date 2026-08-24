@@ -1,7 +1,8 @@
 # ROG Flow Z13 — Power Management
 
-> **[What’s new →](CHANGELOG.md)** Tweaks undervolt · silicon lottery · charge
-> cap that survives reboot · **~99% less idle work** (~81 ms/min → ~0.6 ms/min).
+> **[What’s new →](CHANGELOG.md)** Armory Crate button · **gamescope in-game
+> overlay** · Tweaks undervolt · silicon lottery · charge cap that survives
+> reboot · **~99% less idle work** (~81 ms/min → ~0.6 ms/min).
 
 Automated power profile switching for the **2025 ASUS ROG Flow Z13 (GZ302)**.
 Plug in → performance mode. Unplug → balanced. Low battery → silent.
@@ -49,10 +50,18 @@ One command, six modes (`z13-power <mode>`) plus a settings window, and a tray a
 - **Lock profile** — a manual pick survives power changes (low battery still
   forces the safety profile, then restores your locked pick)
 - **Notifications** — KDE popup on every switch, and when a profile is changed
-  from outside the service (overlay, terminal, Armoury Crate button)
+  from outside the service (overlay, terminal, Armory Crate button)
 - **Diagnose…** — runs `z13-power diagnose` (hardware, permissions, daemon,
   modules) and shows the report with fixes; also checked at service startup
   (only notifies if something is wrong)
+- **Armory Crate button** — the side button that did nothing on Linux
+  (it opened Armory Crate on Windows) now toggles UI: press to open,
+  press again to close. On the desktop that is full settings, stuck
+  above a fullscreen game. **Inside nested gamescope** (Steam, Lutris,
+  Heroic, `gamescope --`) it is a clickable in-game profile picker
+  (Max / Perf / Mid / Silent / Low) — Hyprland, Plasma Wayland, and
+  X11. Uses z13ctl's `gui-toggle` event. The full settings window is
+  never opened on gamescope's Xwayland (that SIGSEGV'd).
 
 `z13-power-settings` (settings window, replaces the z13gui drawer). On
 Omarchy it follows the live theme — same hero / section-header / pill
