@@ -285,6 +285,10 @@ diagnose() {
     printf '  # then log out and back in, and re-run:  z13-power diagnose\n'
     return 1
   fi
+  if [[ "$warns" -gt 0 ]]; then
+    printf 'No failures, but %d warning(s) — see above.\n' "$warns"
+    return 0
+  fi
   printf 'All checks passed.\n'
   return 0
 }

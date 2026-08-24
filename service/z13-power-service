@@ -391,8 +391,12 @@ _last_tdp_args = None
 _last_co = None
 
 
-def apply_mode(mode_def):
-    """Run the z13ctl commands described by a mode config dict. Returns True."""
+def apply_mode(mode_def, force=False):
+    """Run the z13ctl commands described by a mode config dict. Returns True.
+
+    force=True rewrites TDP even when the last args match — needed after
+    something else wrote platform_profile (that restores stock PPT).
+    """
     global _last_tdp_args
     profile = mode_def.get("profile", "balanced")
     tdp_force = str(mode_def.get("tdp_force", "false")).strip().lower() in (
@@ -416,7 +420,7 @@ def apply_mode(mode_def):
         args += [tdp[0], "--pl2", tdp[1], "--pl3", tdp[2]]
     if tdp_force:
         args.append("--force")
-    if args != _last_tdp_args:
+    if force or args != _last_tdp_args:
         if not z13ctl_ok(args):
             return False
         _last_tdp_args = args
@@ -429,7 +433,7 @@ def apply_mode(mode_def):
     if fancurve is not None:
         fancurve = str(fancurve).strip()
         if fancurve in ("reset", "auto"):
-            if not (skipped_profile and custom_fan_pwm_enable() == "2"):
+            if force or not (skipped_profile and custom_fan_pwm_enable() == "2"):
                 z13ctl(["fancurve", "--reset"])
         else:
             z13ctl(["fancurve", "--set", fancurve])
@@ -1939,7 +1943,7 @@ class Service:
     def apply(self, mode, force=False):
         """Apply a mode; notify only when it actually changed (or force)."""
         mode_def = self.cfg["modes"].get(mode) or DEFAULT_MODES[mode]
-        if not apply_mode(mode_def):
+        if not apply_mode(mode_def, force=force):
             notify("Power profile error", f"Failed to apply '{mode}'")
             return False
         self.last_fw_profile = firmware_profile()
@@ -2190,18 +2194,18 @@ class Service:
             self.last_profile = fw
             return
         # Something else wrote platform_profile (DE power panel, z13ctl, …).
+        # Re-apply the full recipe (force TDP) — skip-if-same on the mode
+        # name would keep the label and leave stock PPT behind.
         if self.automatic or self.locked:
-            prev = self._last_applied
+            ac, capacity = read_power()
+            low = not ac and capacity is not None and capacity <= self.cfg["low_battery"]
             if self.automatic:
-                self.evaluate_power()
-            elif self.manual_mode:
-                self.apply(self.manual_mode, force=True)
-            if self._last_applied == prev:
-                notify(
-                    "Power profile",
-                    "Desktop changed the firmware profile; z13-power kept %s"
-                    % MODES.get(prev, prev or fw),
-                )
+                mode = self.cfg["on_low_battery"] if low else (
+                    self.cfg["on_ac"] if ac else self.cfg["on_battery"])
+            else:
+                mode = self.manual_mode
+            if mode:
+                self.apply(mode, force=True)
             return
         mapped = self._mode_for_firmware(fw)
         if mapped:

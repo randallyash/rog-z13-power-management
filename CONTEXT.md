@@ -111,10 +111,11 @@ clears on a live AC/battery change.
   Unlocked manual → Automatic, then on_ac / on_battery.
 - **External profile poll**: 8s read of `/sys/firmware/acpi/platform_profile`
   (no subprocess). If it matches the last applied mode, only `last_fw_profile`
-  is updated. If Automatic or Lock is on, re-apply our recipe (do not turn
-  Automatic off). Unlocked manual: map firmware → mode so the tray matches
-  the chip. Tray/flyout always show `_last_applied`. `status.json` is
-  truncated in place so QML FileView keeps its inotify watch. TDP-only
+  is updated. If Automatic or Lock is on, force-apply the full recipe
+  (TDP included — a same-name skip would leave stock PPT after a DE
+  profile write). Unlocked manual: map firmware → mode so the tray
+  matches the chip. Tray/flyout always show `_last_applied`. `status.json`
+  is truncated in place so QML FileView keeps its inotify watch. TDP-only
   changes do not notify.
 - **Config** is parsed on mtime change (file watcher); the settings window's
   Profiles tab edits the `[service]` values (AC/battery/low-battery modes +
