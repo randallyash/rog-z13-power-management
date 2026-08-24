@@ -163,9 +163,14 @@ setup_undervolt() {
   pkg_install ryzen_smu-dkms-git || die "could not install ryzen_smu-dkms-git"
 
   local rules src
+  # Packaged:  $src is /usr/share/z13-power-management → ./contrib/ryzen-smu
+  # From-source: $src is scripts/ → ../contrib/ryzen-smu
+  # ~/.local/bin override: still find the packaged copy.
   src="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0")")" && pwd)"
   for rules in \
+      "$src/contrib/ryzen-smu/99-ryzen-smu.rules" \
       "$src/../contrib/ryzen-smu/99-ryzen-smu.rules" \
+      /usr/share/z13-power-management/contrib/ryzen-smu/99-ryzen-smu.rules \
       /usr/lib/udev/rules.d/99-ryzen-smu.rules; do
     if [[ -f "$rules" ]]; then
       sudo install -Dm644 "$rules" /etc/udev/rules.d/99-ryzen-smu.rules
@@ -173,7 +178,9 @@ setup_undervolt() {
     fi
   done
   for rules in \
+      "$src/contrib/ryzen-smu/ryzen_smu.conf" \
       "$src/../contrib/ryzen-smu/ryzen_smu.conf" \
+      /usr/share/z13-power-management/contrib/ryzen-smu/ryzen_smu.conf \
       /usr/lib/modules-load.d/z13-power-ryzen_smu.conf; do
     if [[ -f "$rules" ]]; then
       sudo install -Dm644 "$rules" /etc/modules-load.d/z13-power-ryzen_smu.conf

@@ -168,7 +168,9 @@ Strix Halo), drops udev rules + modules-load, `modprobe`s, and restarts
 `z13ctl`. **No prebuilt `.ko` in this repo** — DKMS rebuilds on every
 kernel update.
 
-`./install.sh` runs that step for from-source installs.
+`./install.sh` runs that step for from-source installs. The packaged
+CLI looks in `/usr/share/z13-power-management/contrib/ryzen-smu/` (our
+directory), not `/usr/share/contrib/`.
 
 ---
 
