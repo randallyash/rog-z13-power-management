@@ -238,9 +238,10 @@ automatically every ~30s — no service restart needed.
 
 ## Caveats
 
-- **Undervolt is silicon lottery.** `-20`/`-25` mV worked on one unit; if the
-  bud's Z13 is unstable (crashes under load), raise or remove the undervolt
-  lines in the `silent` / `lowpower` modes of `scripts/z13-power`.
+- **Undervolt is silicon lottery.** Silent (`-20` mV) and Low (`-25` mV) were
+  stable on one GZ302. If yours crashes under load, ease off: pull the Tweaks
+  slider toward 0, or change `undervolt=` in those modes (`scripts/z13-power`
+  / `service.conf`) to something milder or `reset`.
 - **Don't use z13ctl's built-in autoswitch.** `z13ctl autoswitch` and the tray
   service would both fire on power changes and race each other. Leave autoswitch
   off: `z13ctl autoswitch --clear`

@@ -18,9 +18,9 @@ KDE PowerDevil Run Script hooks are intentionally NOT used — the runtime is
 plain Qt + z13ctl + systemd, so it works on any desktop (KDE Plasma, and
 Hyprland/Omarchy, whose bar already ships an SNI tray + notification daemon).
 Only the optional display/DPMS config (`powerdevilrc`, `z13-power-config`) is
-Plasma-specific. Hand-off repo for a friend; values are the original owner's
-per-unit tuning. Packaged as `z13-power-git` in the pkgbuilds repo. License:
-GPL-3.0-or-later.
+Plasma-specific. TDP / undervolt defaults are silicon-lottery values from
+the original unit — other GZ302s may need milder Silent / Low undervolt.
+Packaged as `z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
 
 ## Layout
 
@@ -239,8 +239,9 @@ clears on a live AC/battery change.
 ## Per-unit tuning caveat
 
 Undervolt (-20/-25 mV) and TDP (5–93 W) are silicon-lottery values from the
-original unit. The bud may need to adjust the `silent` / `lowpower` modes in
-`scripts/z13-power`. See README caveats.
+original unit. Other GZ302s may need milder Silent / Low undervolt (Tweaks
+slider, or `undervolt=` in `scripts/z13-power` / `service.conf`). See README
+caveats.
 
 ## Related projects
 
