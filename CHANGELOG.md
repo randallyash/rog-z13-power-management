@@ -1,6 +1,6 @@
 # What’s new in z13-power
 
-This is the drop that makes the Z13 on Linux feel like **G-Helper**, not
+This is the drop that makes the Z13 Power on Linux feel like **Godmode**, not
 like a tray icon with extra steps.
 
 On **Omarchy**, power lives where your hand already goes: the stock
