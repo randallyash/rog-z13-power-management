@@ -16,7 +16,8 @@
 #     service config ("Open config file…" exposes the raw file)
 #   - Armoury Crate button (KEY_PROG3 via z13ctl gui-toggle): toggle settings
 #   - re-applies saved lighting and charge limit at login
-#   - notifies (notify-send) on switches; skipped on Omarchy (flyout is the UI)
+#   - notifies (notify-send) on switches; on Omarchy only plug/unplug and
+#     low-battery (the flyout already confirms clicks)
 #
 # Config: ~/.config/z13-power/service.conf — every z13ctl call the service makes
 # (profile, TDP limits, fan curve, undervolt) is defined there, per mode.
@@ -449,19 +450,59 @@ def apply_mode(mode_def, force=False):
     return True
 
 
-def notify(summary, body, *, important=False):
-    # Omarchy's z13.power flyout is the UI; left-click cycle is gone. Skip
-    # the "now Performance" toasts there. Errors still get through.
-    if not important and _omarchy_power_panel_owns_ui():
+def _mode_glyph(mode):
+    try:
+        return _theme_mod().MODE_GLYPHS.get(mode, "") or ""
+    except Exception:
+        return ""
+
+
+def _omarchy_send():
+    found = shutil.which("omarchy-notification-send")
+    if found:
+        return found
+    bundled = "/usr/bin/omarchy-notification-send"
+    return bundled if os.access(bundled, os.X_OK) else None
+
+
+def notify(summary, body, *, important=False, why="user", glyph=None):
+    # Omarchy flyout already confirms clicks. Toast only power-source
+    # transitions there (plug/unplug, low battery). Errors always get through.
+    # why: user | power | external
+    if not important and _omarchy_power_panel_owns_ui() and why != "power":
+        return
+    if _notify_omarchy(summary, body, important=important, glyph=glyph):
         return
     try:
-        subprocess.run(
-            ["notify-send", "-a", "z13-power", "-i", "preferences-system-power",
-             "-u", "normal", "-t", "3000", summary, body],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
-        )
+        argv = ["notify-send", "-a", "z13-power", "-i", "preferences-system-power",
+                "-u", "critical" if important else "normal", "-t", "3000", summary]
+        if body:
+            argv.append(body)
+        subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=5)
     except (OSError, subprocess.SubprocessError):
         pass
+
+
+def _notify_omarchy(summary, body, *, important=False, glyph=None):
+    """Omarchy card: nerd-font glyph, low-urgency compact toast (omarchy-action)."""
+    cmd = _omarchy_send()
+    if not cmd:
+        return False
+    argv = [cmd, "-u", "critical" if important else "low"]
+    if glyph:
+        argv.extend(["-g", glyph])
+    if important:
+        argv.extend(["--app-name", "z13-power"])
+    argv.append(summary)
+    if body:
+        argv.append(body)
+    try:
+        r = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=5)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def apply_saved_lighting():
@@ -474,7 +515,18 @@ def apply_saved_lighting():
                 for key, default in (("device", "all"), ("mode", "static"),
                                      ("color1", "FF0000"), ("color2", "000000"),
                                      ("speed", "normal"),
-                                     ("brightness", "high"))}
+                                     ("brightness", "high"),
+                                     ("follow_theme", "false"))}
+    if str(lighting.get("follow_theme", "")).lower() in ("1", "true", "yes") \
+            and _theme_mod().is_omarchy():
+        try:
+            c1, c2 = _theme_mod().theme_rgb_pair()
+            lighting["color1"] = c1
+            lighting["color2"] = c2
+        except Exception:
+            pass
+        if lighting["mode"] == "off":
+            lighting["mode"] = "static"
     device_args = [] if lighting["device"] == "all" \
         else ["--device", lighting["device"]]
     if lighting["mode"] == "off":
@@ -1819,6 +1871,14 @@ class Service:
             self.apply_theme(self._theme_mod.load_theme())
         except Exception:
             pass
+        try:
+            cfg = configparser.ConfigParser()
+            cfg.read(LIGHTING_PATH)
+            follow = str(cfg.get("lighting", "follow_theme", fallback="")).lower()
+        except (configparser.Error, OSError):
+            follow = ""
+        if follow in ("1", "true", "yes") and self._theme_mod.is_omarchy():
+            apply_saved_lighting()
 
     def rebuild_themed_menu(self):
         if self.themed_menu is None:
@@ -1949,51 +2009,76 @@ class Service:
             # An unlocked manual pick clears on power-source change.
             self.set_automatic(refresh=False)
         self.cfg = load_config()
-        self._apply_power_state(ac, capacity)
+        self._apply_power_state(ac, capacity, why="power")
 
-    def _apply_power_state(self, ac, capacity):
+    def _apply_power_state(self, ac, capacity, why="user"):
         low = not ac and capacity is not None and capacity <= self.cfg["low_battery"]
         if low:
             # Safety rule: low battery forces the configured profile.
+            newly = not self.low_latched
             self.low_latched = True
-            self.apply(self.cfg["on_low_battery"])
+            self.apply(self.cfg["on_low_battery"], why="power" if newly else why)
             return
         if self.low_latched:
             self.low_latched = False
+            why = "power"
             if not self.automatic:
-                self.apply(self.manual_mode)  # restore locked/manual pick
+                self.apply(self.manual_mode, why=why)  # restore locked/manual pick
                 return
         if self.automatic:
             mode = self.cfg["on_ac"] if ac else self.cfg["on_battery"]
             if mode != self._last_applied:
-                self.apply(mode)
+                self.apply(mode, why=why)
             else:
                 self.update_menu_checks()
                 self.update_tray()
+                # Plug/unplug is the event even if the mode name did not change
+                # (already Performance, or on_poll already wrote it).
+                if why == "power":
+                    self._announce(mode, why)
         elif self.manual_mode and self.manual_mode != self._last_applied:
-            self.apply(self.manual_mode, force=True)
+            self.apply(self.manual_mode, force=True, why=why)
+        elif why == "power" and self._last_applied:
+            self._announce(self._last_applied, why)
 
-    def apply(self, mode, force=False):
+    def _announce(self, mode, why):
+        src = self._source_phrase()
+        label = MODES.get(mode, mode)
+        glyph = _mode_glyph(mode)
+        if _omarchy_send():
+            notify(f"{label} · {src}", "", why=why, glyph=glyph)
+        else:
+            notify(f"Power profile: {label}", f"{src} \u00b7 {label}", why=why)
+        self._last_notified = mode
+
+    def apply(self, mode, force=False, why="user"):
         """Apply a mode; notify only when it actually changed (or force)."""
         mode_def = self.cfg["modes"].get(mode) or DEFAULT_MODES[mode]
         if not apply_mode(mode_def, force=force):
             notify("Power profile error", f"Failed to apply '{mode}'",
-                   important=True)
+                   important=True, glyph="\U000f0026")
             return False
         self.last_fw_profile = firmware_profile()
         self.last_profile = self.last_fw_profile or mode_def.get("profile", "")
         self._last_applied = mode
         self.update_menu_checks()
         self.update_tray()
-        if force or mode != self._last_notified:
-            notify(f"Power profile: {MODES[mode]}", self._body(mode))
-        self._last_notified = mode
+        if why == "power" or force or mode != self._last_notified:
+            self._announce(mode, why)
+        else:
+            self._last_notified = mode
         return True
 
-    def _body(self, mode):
+    def _source_phrase(self):
         ac, capacity = read_power()
-        src = "AC" if ac else ("battery %d%%" % capacity if capacity is not None else "battery")
-        return f"{src} \u00b7 {MODES[mode]}"
+        if ac:
+            return "AC"
+        if capacity is not None:
+            return "battery %d%%" % capacity
+        return "battery"
+
+    def _body(self, mode):
+        return f"{self._source_phrase()} \u00b7 {MODES[mode]}"
 
     def update_menu_checks(self):
         if self.themed_menu is not None and self.themed_menu.isVisible():
@@ -2216,6 +2301,11 @@ class Service:
         box.exec()
 
     def on_poll(self):
+        ac, _capacity = read_power()
+        if ac != self.last_ac:
+            # udev sometimes misses USB-C; don't wait for the 30s safety timer.
+            self.evaluate_power()
+            return
         fw = firmware_profile()
         if not fw or fw == self.last_fw_profile:
             return
@@ -2240,7 +2330,7 @@ class Service:
             else:
                 mode = self.manual_mode
             if mode:
-                self.apply(mode, force=True)
+                self.apply(mode, force=True, why="external")
             return
         mapped = self._mode_for_firmware(fw)
         if mapped:

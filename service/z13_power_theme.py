@@ -16,15 +16,20 @@ import re
 import subprocess
 
 from PyQt6.QtCore import (
-    QObject, QPoint, QRectF, Qt, QFileSystemWatcher, pyqtSignal,
+    QObject, QPoint, QPointF, QRectF, Qt, QFileSystemWatcher, pyqtSignal,
 )
 from PyQt6.QtGui import (
-    QColor, QCursor, QFont, QGuiApplication, QPainter, QPen,
+    QColor, QCursor, QFont, QGuiApplication, QPainter, QPainterPath, QPen,
 )
 from PyQt6.QtWidgets import (
     QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
     QSizePolicy, QStyle, QStyleOption, QVBoxLayout, QWidget,
 )
+
+def is_omarchy():
+    """True when this user has an Omarchy config — not KDE/Cachy-without-it."""
+    return os.path.isdir(os.path.expanduser("~/.config/omarchy"))
+
 
 CURRENT_DIR = os.path.expanduser("~/.local/state/omarchy/current")
 THEME_DIR = os.path.join(CURRENT_DIR, "theme")
@@ -255,6 +260,23 @@ def load_theme():
         "display_size": max(18, base * 2),
         "radius": detect_radius(),
     }
+
+
+def theme_rgb_pair(theme=None):
+    """Accent + cyan from the live Omarchy theme, as 6-digit hex (no #)."""
+    t = theme or load_theme()
+
+    def strip(c):
+        s = str(c or "").strip().lstrip("#")
+        if len(s) == 3 and all(ch in "0123456789abcdefABCDEF" for ch in s):
+            s = "".join(ch * 2 for ch in s)
+        if len(s) >= 6 and all(ch in "0123456789abcdefABCDEF" for ch in s[:6]):
+            return s[:6].upper()
+        return None
+
+    c1 = strip(t.get("accent")) or "81A1C1"
+    c2 = strip(t.get("cyan")) or strip(t.get("blue")) or c1
+    return c1, c2
 
 
 def mode_colors(theme=None):
@@ -1108,3 +1130,208 @@ class InfoRow(QWidget):
         self._value.setStyleSheet(
             f"color: {theme['foreground']}; background: transparent;"
         )
+
+
+class FanCurveGraph(QWidget):
+    """Eight firmware curve points. Drag to edit. X = °C, Y = fan %."""
+
+    changed = pyqtSignal()
+    TEMP_MIN, TEMP_MAX = 30, 100
+
+    def __init__(self, theme, parent=None):
+        super().__init__(parent)
+        self._theme = theme
+        self._points = [(40 + i * 7, min(255, 24 + i * 28)) for i in range(8)]
+        self._hover = -1
+        self._drag = -1
+        self._live_temp = None
+        self._min_pwm = 0
+        self.setMouseTracking(True)
+        self.setMinimumHeight(260)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.apply_theme(theme)
+
+    def apply_theme(self, theme):
+        self._theme = theme
+        self.update()
+
+    def set_points(self, points):
+        if len(points) != 8:
+            return
+        self._points = [(int(t), int(p)) for t, p in points]
+        self.update()
+        self.changed.emit()
+
+    def points(self):
+        return list(self._points)
+
+    def set_live_temp(self, temp):
+        try:
+            self._live_temp = int(temp)
+        except (TypeError, ValueError):
+            self._live_temp = None
+        self.update()
+
+    def set_min_pwm(self, pwm):
+        try:
+            self._min_pwm = max(0, min(255, int(pwm)))
+        except (TypeError, ValueError):
+            self._min_pwm = 0
+        self.update()
+
+    def selected_label(self):
+        i = self._drag if self._drag >= 0 else self._hover
+        if i < 0:
+            return ""
+        temp, pwm = self._points[i]
+        return "Point %d  ·  %d°C  ·  %d%%" % (i + 1, temp, round(pwm * 100 / 255))
+
+    def _plot(self):
+        return QRectF(42, 14, max(48, self.width() - 56), max(48, self.height() - 40))
+
+    def _xy(self, temp, pwm):
+        plot = self._plot()
+        tx = (temp - self.TEMP_MIN) / float(self.TEMP_MAX - self.TEMP_MIN)
+        py = pwm / 255.0
+        return plot.left() + tx * plot.width(), plot.bottom() - py * plot.height()
+
+    def _from_xy(self, x, y):
+        plot = self._plot()
+        tx = 0.0 if plot.width() <= 0 else (x - plot.left()) / plot.width()
+        py = 0.0 if plot.height() <= 0 else (plot.bottom() - y) / plot.height()
+        temp = round(self.TEMP_MIN + tx * (self.TEMP_MAX - self.TEMP_MIN))
+        pwm = round(py * 255)
+        return temp, pwm
+
+    def _hit(self, pos):
+        best, dist = -1, 18.0
+        for i, (temp, pwm) in enumerate(self._points):
+            x, y = self._xy(temp, pwm)
+            d = ((pos.x() - x) ** 2 + (pos.y() - y) ** 2) ** 0.5
+            if d < dist:
+                best, dist = i, d
+        return best
+
+    def paintEvent(self, _event):
+        t = self._theme
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        plot = self._plot()
+        radius = float(t.get("radius", 8))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(t["control_fill"]))
+        painter.drawRoundedRect(
+            QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+
+        muted = QColor(t["foreground"])
+        muted.setAlphaF(0.45)
+        painter.setFont(QFont(t["font"], t["caption_size"]))
+
+        for pct in (0, 25, 50, 75, 100):
+            _x, y = self._xy(self.TEMP_MIN, round(pct * 255 / 100.0))
+            painter.setPen(QPen(QColor(t["control_border"])))
+            painter.drawLine(int(plot.left()), int(y), int(plot.right()), int(y))
+            painter.setPen(QPen(muted))
+            painter.drawText(
+                QRectF(2, y - 9, plot.left() - 8, 18),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                "%d%%" % pct)
+
+        for temp in (30, 50, 70, 90, 100):
+            x, _y = self._xy(temp, 0)
+            painter.setPen(QPen(QColor(t["control_border"])))
+            painter.drawLine(int(x), int(plot.top()), int(x), int(plot.bottom()))
+            painter.setPen(QPen(muted))
+            painter.drawText(
+                QRectF(x - 20, plot.bottom() + 2, 40, 18),
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                "%d°" % temp)
+
+        if self._min_pwm > 0:
+            _x, y = self._xy(self.TEMP_MIN, self._min_pwm)
+            dash = QPen(QColor(t.get("yellow") or t["accent"]))
+            dash.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(dash)
+            painter.drawLine(int(plot.left()), int(y), int(plot.right()), int(y))
+
+        path = QPainterPath()
+        x0, y0 = self._xy(self._points[0][0], self._points[0][1])
+        path.moveTo(x0, plot.bottom())
+        path.lineTo(x0, y0)
+        for temp, pwm in self._points[1:]:
+            x, y = self._xy(temp, pwm)
+            path.lineTo(x, y)
+        x_end, _y_end = self._xy(self._points[-1][0], self._points[-1][1])
+        path.lineTo(x_end, plot.bottom())
+        path.closeSubpath()
+        fill = QColor(t["accent"])
+        fill.setAlphaF(0.18)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(fill)
+        painter.drawPath(path)
+
+        line = QPen(QColor(t["accent"]))
+        line.setWidthF(2.2)
+        painter.setPen(line)
+        for i in range(len(self._points) - 1):
+            x1, y1 = self._xy(self._points[i][0], self._points[i][1])
+            x2, y2 = self._xy(self._points[i + 1][0], self._points[i + 1][1])
+            painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+
+        if self._live_temp is not None:
+            temp = max(self.TEMP_MIN, min(self.TEMP_MAX, self._live_temp))
+            x, _y = self._xy(temp, 0)
+            live = QPen(QColor(t["foreground"]))
+            live.setStyle(Qt.PenStyle.DashLine)
+            live.setWidthF(1.2)
+            painter.setPen(live)
+            painter.drawLine(int(x), int(plot.top()), int(x), int(plot.bottom()))
+
+        for i, (temp, pwm) in enumerate(self._points):
+            x, y = self._xy(temp, pwm)
+            r = 7.0 if i in (self._hover, self._drag) else 5.0
+            painter.setPen(QPen(QColor(t["accent"]), 2))
+            painter.setBrush(QColor(t["popup_bg"]))
+            painter.drawEllipse(QPointF(x, y), r, r)
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        self._drag = self._hit(event.position())
+        if self._drag >= 0:
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.update()
+            self.changed.emit()
+
+    def mouseMoveEvent(self, event):
+        pos = event.position()
+        if self._drag < 0:
+            hover = self._hit(pos)
+            if hover != self._hover:
+                self._hover = hover
+                self.update()
+                self.changed.emit()
+            return
+        i = self._drag
+        temp, pwm = self._from_xy(pos.x(), pos.y())
+        lo_t = self.TEMP_MIN if i == 0 else self._points[i - 1][0] + 1
+        hi_t = self.TEMP_MAX if i == 7 else self._points[i + 1][0] - 1
+        lo_p = self._min_pwm if i == 0 else max(self._min_pwm, self._points[i - 1][1])
+        hi_p = 255 if i == 7 else self._points[i + 1][1]
+        self._points[i] = (max(lo_t, min(hi_t, temp)), max(lo_p, min(hi_p, pwm)))
+        self.update()
+        self.changed.emit()
+
+    def mouseReleaseEvent(self, _event):
+        self._drag = -1
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.update()
+        self.changed.emit()
+
+    def leaveEvent(self, event):
+        if self._drag < 0 and self._hover != -1:
+            self._hover = -1
+            self.update()
+            self.changed.emit()
+        super().leaveEvent(event)

@@ -20,11 +20,20 @@ Panel {
   property int profileIndex: 0
   property bool cursorActive: false
   property bool z13Present: false
+  property string z13Tdp: "—"
+  property string z13Draw: ""
+  property string z13ModeGlyph: ""
+  readonly property string z13TdpLabel: {
+    if (root.z13Draw !== "") {
+      if (root.z13Tdp && root.z13Tdp !== "—")
+        return root.z13Draw + "W / " + root.z13Tdp
+      return root.z13Draw + "W"
+    }
+    return root.z13Tdp
+  }
   readonly property bool showPercentage: setting("showPercentage", false) === true
-  // With the percentage shown the button paints a text block wider than an
-  // icon, so the open-panel mark takes the painted width instead of the
-  // icon-sized fraction of the slot the fallback assumes.
-  readonly property real openPanelIndicatorWidth: showPercentage && !button.vertical ? button.glyphPaintedWidth : 0
+  readonly property bool showModeBeside: z13ModeGlyph.length > 0
+  readonly property real openPanelIndicatorWidth: (showPercentage || showModeBeside) && !button.vertical ? button.glyphPaintedWidth : 0
   readonly property bool batteryPresent: {
     var device = UPower.displayDevice
     return !!(device && device.isPresent)
@@ -240,13 +249,40 @@ Panel {
       try {
         var s = JSON.parse(text())
         root.z13Present = !!(s && s.mode)
+        root.z13Tdp = (s && s.tdp !== undefined && s.tdp !== null && s.tdp !== "")
+          ? String(s.tdp) + "W" : "—"
+        root.z13ModeGlyph = Model.modeGlyph(s && s.mode)
       } catch (e) {
         root.z13Present = false
+        root.z13Tdp = "—"
+        root.z13ModeGlyph = ""
       }
     }
   }
 
   Component.onCompleted: z13Detect.reload()
+
+  Process {
+    id: drawProc
+    command: ["bash", "-c",
+      'for d in /sys/class/hwmon/hwmon*; do read n < "$d/name" || continue; [ "$n" = amdgpu ] || continue; cat "$d/power1_average" 2>/dev/null || cat "$d/power1_input"; break; done']
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var n = parseInt(text, 10)
+        if (!isFinite(n) || n <= 0) return
+        root.z13Draw = String(Math.round(n / 1000000))
+      }
+    }
+  }
+
+  Timer {
+    interval: 1500
+    running: root.opened
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: if (!drawProc.running) drawProc.running = true
+  }
 
   Timer { interval: 5000; running: root.opened; repeat: true; onTriggered: root.refresh() }
 
@@ -298,9 +334,11 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: root.showPercentage && !vertical
-      ? Math.round(root.batteryFraction * 100) + "% " + root.batteryIcon()
-      : root.batteryIcon()
-    slotSize: Style.bar.iconSlot * (root.showPercentage && !vertical ? 2 : 1)
+      ? Math.round(root.batteryFraction * 100) + "% " + (root.z13ModeGlyph || root.batteryIcon())
+      : (root.showModeBeside && !vertical
+          ? root.batteryIcon() + " " + root.z13ModeGlyph
+          : root.batteryIcon())
+    slotSize: Style.bar.iconSlot * ((root.showPercentage || root.showModeBeside) && !vertical ? 2 : 1)
     tooltipText: ""
     onPressed: function(b) {
       if (!root.batteryPresent) return
@@ -451,7 +489,7 @@ Panel {
             width: (parent.width - parent.spacing) / 2
             spacing: Style.spacing.labelGap
             InfoPair { label: "Battery size"; value: root.batteryInfo.size || "" }
-            InfoPair { label: "Charge cycles"; value: root.batteryInfo.cycles || "—" }
+            InfoPair { label: "TDP"; value: root.z13TdpLabel }
           }
 
           Column {

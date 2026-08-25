@@ -62,6 +62,18 @@ Column {
   property string diagnoseText: ""
   property bool diagnoseBusy: false
 
+  function binCommand(name, args) {
+    // ~/.local/bin (from-source), then /usr/bin (package), then PATH.
+    // Omarchy's shell PATH often skips ~/.local/bin.
+    var rest = args ? args : []
+    return [
+      "bash", "-c",
+      'for p in "$HOME/.local/bin/$1" "/usr/bin/$1"; do [ -x "$p" ] && exec "$p" "${@:2}"; done; exec "$1" "${@:2}"',
+      "z13-bin",
+      name
+    ].concat(rest)
+  }
+
   function send(op, extra) {
     var payload = extra ? extra : {}
     payload.op = op
@@ -100,11 +112,9 @@ Column {
       return
     }
     if (root.diagnoseBusy) return
-    if (root.diagnoseText !== "") {
-      root.diagnoseOpen = true
-      return
-    }
     root.diagnoseBusy = true
+    root.diagnoseText = ""
+    diagnoseProc.command = binCommand("z13-power", ["diagnose"])
     diagnoseProc.running = false
     diagnoseProc.running = true
   }
@@ -138,7 +148,6 @@ Column {
 
   Process {
     id: diagnoseProc
-    command: ["z13-power", "diagnose"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -345,9 +354,8 @@ Column {
       fontFamily: root.fontFamily
       bordered: true
       onClicked: {
-        var local = Quickshell.env("HOME") + "/.local/bin/z13-power-settings"
+        cmdProc.command = binCommand("z13-power-settings")
         cmdProc.running = false
-        cmdProc.command = [local]
         cmdProc.running = true
       }
     }

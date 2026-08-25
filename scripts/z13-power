@@ -277,13 +277,6 @@ diagnose() {
       printf '[ OK ] z13ctl autoswitch: off\n'
     fi
   fi
-  if systemctl is-active --quiet power-profiles-daemon.service 2>/dev/null; then
-    printf '[WARN] power-profiles-daemon: active — also switches firmware on plug/unplug\n'
-    printf '       disable: sudo systemctl disable --now power-profiles-daemon\n'
-    warns=$((warns+1))
-  else
-    printf '[ OK ] power-profiles-daemon: not active\n'
-  fi
   printf '\nSummary: %d failure(s), %d warning(s).\n' "$fails" "$warns"
   if [[ "$fails" -gt 0 ]]; then
     printf 'Next steps:\n'

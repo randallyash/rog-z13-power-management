@@ -45,6 +45,15 @@ function profileIcon(name) {
   return "󰂄"
 }
 
+function modeGlyph(id) {
+  if (id === "max") return String.fromCodePoint(0xF0E7)
+  if (id === "performance") return String.fromCodePoint(0xF04C5)
+  if (id === "balanced") return String.fromCodePoint(0xF04BA)
+  if (id === "silent") return String.fromCodePoint(0xF075F)
+  if (id === "lowpower") return String.fromCodePoint(0xF0331)
+  return ""
+}
+
 function batteryFraction(device) {
   return device && device.isPresent ? Math.max(0, Math.min(1, device.percentage)) : 0
 }
@@ -96,6 +105,7 @@ if (typeof module !== "undefined") {
     parseKeyValue: parseKeyValue,
     parseProfiles: parseProfiles,
     profileIcon: profileIcon,
+    modeGlyph: modeGlyph,
     batteryFraction: batteryFraction,
     chargeThresholdActive: chargeThresholdActive,
     batteryIcon: batteryIcon,

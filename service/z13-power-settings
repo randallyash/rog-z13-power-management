@@ -29,10 +29,10 @@ import sys
 
 from PyQt6.QtCore import Qt, QTimer, QFileSystemWatcher
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (QApplication, QColorDialog, QFrame, QGridLayout,
+from PyQt6.QtWidgets import (QApplication, QColorDialog, QFrame,
                              QHBoxLayout, QLabel, QMainWindow, QScrollArea,
-                             QSlider, QSpinBox, QStackedWidget, QVBoxLayout,
-                             QWidget)
+                             QSizePolicy, QSlider, QSpinBox, QStackedWidget,
+                             QVBoxLayout, QWidget)
 
 def _theme_mod():
     here = os.path.dirname(os.path.realpath(__file__))
@@ -69,6 +69,7 @@ PRESET_COLORS = [
 DEFAULT_LIGHTING = {
     "device": "all", "mode": "static", "color1": "FF0000",
     "color2": "000000", "speed": "normal", "brightness": "high",
+    "follow_theme": "false",
 }
 
 MODE_OPTIONS = [
@@ -229,8 +230,24 @@ def save_lighting(lighting):
         cfg.write(f)
 
 
+def _follows_theme(lighting):
+    if not _theme_mod().is_omarchy():
+        return False
+    return str(lighting.get("follow_theme", "")).lower() in ("1", "true", "yes")
+
+
 def apply_lighting(lighting):
     """Apply a lighting dict via z13ctl; return (ok, message)."""
+    lighting = dict(lighting)
+    if _follows_theme(lighting):
+        try:
+            c1, c2 = _theme_mod().theme_rgb_pair()
+            lighting["color1"] = c1
+            lighting["color2"] = c2
+        except Exception:
+            pass
+        if lighting.get("mode") == "off":
+            lighting["mode"] = "static"
     device_args = [] if lighting["device"] == "all" \
         else ["--device", lighting["device"]]
     if lighting["mode"] == "off":
@@ -388,6 +405,22 @@ def fan_curve():
     return points, mode
 
 
+def _amdgpu_ppt_w():
+    """Live SoC draw in watts from amdgpu PPT, or None."""
+    base = _hwmon_path("amdgpu")
+    if not base:
+        return None
+    raw = (_read_sysfs(os.path.join(base, "power1_average"))
+           or _read_sysfs(os.path.join(base, "power1_input")))
+    try:
+        uw = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if uw <= 0:
+        return None
+    return int(round(uw / 1_000_000))
+
+
 def tdp_pl1():
     """Current PL1 in watts (0 if it cannot be read)."""
     raw = _read_sysfs(os.path.join(ASUS_WMI, "ppt_pl1_spl"))
@@ -419,6 +452,73 @@ def read_status_file():
         return {}
 
 
+class LiveStrip(QWidget):
+    """Temp · fan · live/cap watts. Visible on every Settings page."""
+
+    def __init__(self, theme, parent=None):
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 2, 0, 2)
+        row.setSpacing(22)
+        self.temp = self._cell("Temp", theme)
+        self.fan = self._cell("Fan", theme)
+        self.ppt = self._cell("TDP", theme)
+        row.addWidget(self.temp[0], 0)
+        row.addWidget(self.fan[0], 0)
+        row.addWidget(self.ppt[0], 0)
+        row.addStretch(1)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start(1500)
+        self.refresh()
+
+    def _cell(self, title, theme):
+        wrap = QWidget()
+        box = QHBoxLayout(wrap)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(8)
+        lab = QLabel(title)
+        val = QLabel("—")
+        muted = QColor(theme["foreground"])
+        muted.setAlphaF(0.55)
+        lab.setStyleSheet(
+            f"color: {muted.name(QColor.NameFormat.HexArgb)}; background: transparent;")
+        val.setStyleSheet(
+            f"color: {theme['foreground']}; background: transparent; font-weight: 600;")
+        box.addWidget(lab)
+        box.addWidget(val)
+        wrap.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        return wrap, val, lab
+
+    def refresh(self):
+        k10 = _hwmon_path("k10temp")
+        raw = _read_sysfs(os.path.join(k10, "temp1_input")) if k10 else None
+        try:
+            self.temp[1].setText("%d°C" % (int(raw) // 1000))
+        except (TypeError, ValueError):
+            self.temp[1].setText("—")
+        asus = _hwmon_path("asus")
+        rpm = []
+        if asus:
+            for i in (1, 2):
+                raw = _read_sysfs(os.path.join(asus, "fan%d_input" % i))
+                try:
+                    rpm.append(int(raw))
+                except (TypeError, ValueError):
+                    pass
+        self.fan[1].setText("%d RPM" % max(rpm) if rpm else "—")
+        draw = _amdgpu_ppt_w()
+        cap = tdp_pl1()
+        if draw is not None and cap:
+            self.ppt[1].setText("%dW / %dW" % (draw, cap))
+        elif draw is not None:
+            self.ppt[1].setText("%dW" % draw)
+        elif cap:
+            self.ppt[1].setText("%dW" % cap)
+        else:
+            self.ppt[1].setText("—")
+
+
 # ── pages ────────────────────────────────────────────────────────────────────
 
 class LightingTab(QWidget):
@@ -427,6 +527,7 @@ class LightingTab(QWidget):
         T = _theme_mod()
         self.theme = theme
         self.lighting = load_lighting()
+        self._ready = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 0, 4, 0)
@@ -459,13 +560,14 @@ class LightingTab(QWidget):
 
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
-        self.apply_btn = T.Pill("Apply lighting", theme)
-        self.apply_btn.setCheckable(False)
-        self.apply_btn.clicked.connect(self.on_apply)
+        if T.is_omarchy():
+            self.theme_btn = T.Pill("Follow Omarchy theme", theme)
+            self.theme_btn.setCheckable(False)
+            self.theme_btn.clicked.connect(self.on_follow_theme)
+            buttons.addWidget(self.theme_btn)
         self.off_btn = T.Pill("Turn off", theme)
         self.off_btn.setCheckable(False)
         self.off_btn.clicked.connect(self.on_off)
-        buttons.addWidget(self.apply_btn)
         buttons.addWidget(self.off_btn)
         layout.addLayout(buttons)
 
@@ -473,8 +575,27 @@ class LightingTab(QWidget):
         layout.addWidget(self.status)
         layout.addStretch(1)
 
+        self._follow = _follows_theme(self.lighting)
+        if self._follow:
+            try:
+                c1, c2 = T.theme_rgb_pair(theme)
+                self.lighting["color1"] = c1
+                self.lighting["color2"] = c2
+            except Exception:
+                pass
         self._set_swatch(self.color1_swatches, self.lighting["color1"])
         self._set_swatch(self.color2_swatches, self.lighting["color2"])
+
+        self._ready = False
+        self._live = QTimer(self)
+        self._live.setSingleShot(True)
+        self._live.setInterval(90)
+        self._live.timeout.connect(self.on_apply)
+        self.device_row.changed.connect(self._queue)
+        self.mode_row.changed.connect(self._queue)
+        self.speed_row.changed.connect(self._queue)
+        self.brightness_row.changed.connect(self._queue)
+        self._ready = True
 
     def _color_row(self, layout, T, theme):
         row = QWidget()
@@ -499,9 +620,17 @@ class LightingTab(QWidget):
         layout.addWidget(row)
         return swatches
 
-    def _pick(self, swatches, target):
+    def _queue(self, *_args):
+        if not self._ready:
+            return
+        self._live.start()
+
+    def _pick(self, swatches, target, live=True):
         for sw in swatches:
             sw.setChecked(sw is target)
+        if live:
+            self._follow = False
+            self._queue()
 
     def _set_swatch(self, swatches, hexval):
         hexval = hexval.lstrip("#").lower()
@@ -510,8 +639,9 @@ class LightingTab(QWidget):
             if sw.hexval.lower() == hexval:
                 target = sw
         if target is None:
-            return
-        self._pick(swatches, target)
+            swatches[0].set_hex(hexval)
+            target = swatches[0]
+        self._pick(swatches, target, live=False)
 
     def _selected(self, swatches):
         for sw in swatches:
@@ -528,7 +658,6 @@ class LightingTab(QWidget):
         custom_sw = target[0]
         custom_sw.set_hex(hexval)
         self._pick(target, custom_sw)
-        self.status.set_info(f"Color {hexval} selected — press Apply")
 
     def _collect(self):
         return {
@@ -538,6 +667,7 @@ class LightingTab(QWidget):
             "color2": self._selected(self.color2_swatches).lstrip("#"),
             "speed": self.speed_row.value(),
             "brightness": self.brightness_row.value(),
+            "follow_theme": "true" if self._follow else "false",
         }
 
     def on_apply(self):
@@ -547,11 +677,34 @@ class LightingTab(QWidget):
         self.status.set_result(ok, msg + " ✓" if ok else
                                f"{msg} — failed (check z13ctl / permissions)")
 
+    def on_follow_theme(self):
+        self._ready = False
+        self._follow = True
+        try:
+            c1, c2 = _theme_mod().theme_rgb_pair(self.theme)
+        except Exception:
+            c1, c2 = "81A1C1", "88C0D0"
+        self._set_swatch(self.color1_swatches, c1)
+        self._set_swatch(self.color2_swatches, c2)
+        if self.mode_row.value() == "off":
+            self.mode_row.set_value("static")
+        self._follow = True
+        self._ready = True
+        lighting = self._collect()
+        save_lighting(lighting)
+        ok, msg = apply_lighting(lighting)
+        self.status.set_result(
+            ok, "Following the Omarchy theme." if ok else
+            f"{msg} — failed (check z13ctl / permissions)")
+
     def on_off(self):
+        self._ready = False
+        self._follow = False
         lighting = self._collect()
         lighting["mode"] = "off"
         save_lighting(lighting)
         self.mode_row.set_value("off")
+        self._ready = True
         ok, msg = apply_lighting(lighting)
         self.status.set_result(ok, msg + " ✓" if ok else
                                f"{msg} — failed (check z13ctl / permissions)")
@@ -563,32 +716,17 @@ class FanTab(QWidget):
         T = _theme_mod()
         v = QVBoxLayout(self)
         v.setContentsMargins(4, 0, 4, 0)
-        v.setSpacing(14)
+        v.setSpacing(12)
 
-        self.info = T.Note("", theme)
+        self.info = T.Note("Drag the dots. X is temperature, Y is fan speed.", theme)
         v.addWidget(self.info)
 
-        v.addWidget(T.SectionHeader("CURVE POINTS", theme))
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(6)
-        temp_h = T.SectionHeader("TEMP (°C)", theme)
-        pwm_h = T.SectionHeader("PWM (0–255)", theme)
-        grid.addWidget(temp_h, 0, 0)
-        grid.addWidget(pwm_h, 0, 1)
-        self.temp_spins, self.pwm_spins = [], []
-        for i in range(8):
-            ts = QSpinBox()
-            ts.setRange(30, 100)
-            ts.setValue(45 + i * 5)
-            ps = QSpinBox()
-            ps.setRange(0, 255)
-            ps.setValue(40 + i * 20)
-            grid.addWidget(ts, i + 1, 0)
-            grid.addWidget(ps, i + 1, 1)
-            self.temp_spins.append(ts)
-            self.pwm_spins.append(ps)
-        v.addLayout(grid)
+        self.graph = T.FanCurveGraph(theme)
+        self.graph.changed.connect(self._on_graph)
+        v.addWidget(self.graph, 1)
+
+        self.point = T.InfoRow("Selected", "Drag a point", theme)
+        v.addWidget(self.point)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
@@ -608,42 +746,63 @@ class FanTab(QWidget):
 
         self.msg = T.StatusLine(theme)
         v.addWidget(self.msg)
-        v.addStretch(1)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._live_temp)
+
+    def _on_graph(self):
+        self.point.set_value(self.graph.selected_label() or "Drag a point")
+
+    def _live_temp(self):
+        k10 = _hwmon_path("k10temp")
+        if not k10:
+            return
+        raw = _read_sysfs(os.path.join(k10, "temp1_input"))
+        try:
+            self.graph.set_live_temp(int(raw) // 1000)
+        except (TypeError, ValueError):
+            pass
 
     def showEvent(self, event):
         super().showEvent(event)
         if not getattr(self, "_loaded", False):
             self._loaded = True
             self.fetch()
+        self._live_temp()
+        self._timer.start(2000)
+
+    def hideEvent(self, event):
+        self._timer.stop()
+        super().hideEvent(event)
 
     def fetch(self):
         points, mode = fan_curve()
         if len(points) == 8:
-            for i, (temp, pwm) in enumerate(points):
-                self.temp_spins[i].setValue(temp)
-                self.pwm_spins[i].setValue(pwm)
+            self.graph.set_points(points)
         pl1 = tdp_pl1()
-        extra = (" — above 75 W: every point must be ≥50% PWM and reset is "
-                 "refused" if pl1 > 75 else "")
-        self.info.setText(f"Fan mode: {mode or 'unknown'}. PL1: {pl1} W{extra}")
+        self.graph.set_min_pwm(127 if pl1 > 75 else 0)
+        extra = (" — above 75 W every point stays ≥50% and reset is refused"
+                 if pl1 > 75 else "")
+        self.info.setText(
+            "Drag the dots. Fan mode: %s. PL1: %s W%s" % (
+                mode or "unknown", pl1, extra))
         if len(points) == 8:
             self.msg.set_info("Fetched current curve.")
         else:
             self.msg.set_result(False, "Could not read the current fan curve.")
 
     def _curve_string(self):
-        temps = [ts.value() for ts in self.temp_spins]
-        pwms = [ps.value() for ps in self.pwm_spins]
+        points = self.graph.points()
+        temps = [t for t, _p in points]
+        pwms = [p for _t, p in points]
         for i in range(1, len(temps)):
             if temps[i] <= temps[i - 1]:
                 raise ValueError("Temps must increase left to right.")
         for i in range(1, len(pwms)):
             if pwms[i] < pwms[i - 1]:
-                raise ValueError("PWM values must not decrease.")
+                raise ValueError("Fan speed must not decrease.")
         if tdp_pl1() > 75 and any(p < 127 for p in pwms):
-            raise ValueError("PL1 is above 75 W — every point must be ≥50% "
-                             "PWM (127).")
-        return ",".join(f"{t}:{p}" for t, p in zip(temps, pwms))
+            raise ValueError("PL1 is above 75 W — every point must be ≥50%.")
+        return ",".join("%d:%d" % (t, p) for t, p in points)
 
     def apply(self):
         try:
@@ -677,6 +836,11 @@ class BatteryTab(QWidget):
         self.current = T.InfoRow("Current", "—", theme)
         v.addWidget(self.current)
 
+        self.presets = T.PillRow(
+            [("60", "60%"), ("80", "80%"), ("100", "100%")], theme)
+        self.presets.changed.connect(self._on_preset)
+        v.addWidget(self.presets)
+
         row = QHBoxLayout()
         row.setSpacing(12)
         self.slider = QSlider(Qt.Orientation.Horizontal)
@@ -685,6 +849,7 @@ class BatteryTab(QWidget):
         self.value_label = QLabel("80%")
         self.slider.valueChanged.connect(
             lambda n: self.value_label.setText(f"{n}%"))
+        self.slider.valueChanged.connect(self._sync_preset)
         row.addWidget(self.slider, 1)
         row.addWidget(self.value_label)
         v.addLayout(row)
@@ -724,10 +889,26 @@ class BatteryTab(QWidget):
         saved = load_charge_limit()
         val = live if live is not None else saved
         if val is not None:
+            self.slider.blockSignals(True)
             self.slider.setValue(val)
+            self.slider.blockSignals(False)
+            self.value_label.setText("%d%%" % val)
+            self._sync_preset(val)
             self.current.set_value(f"{val}%")
             return
         self.current.set_value("unknown")
+
+    def _sync_preset(self, val):
+        key = str(int(val))
+        if key in ("60", "80", "100"):
+            self.presets.set_value(key)
+            return
+        for pill in self.presets._pills.values():
+            pill.setChecked(False)
+
+    def _on_preset(self, value):
+        self.slider.setValue(int(value))
+        self.apply()
 
     def apply(self):
         val = self.slider.value()
@@ -969,7 +1150,12 @@ class TelemetryTab(QWidget):
         tdp = st.get("tdp")
         if tdp in (None, ""):
             tdp = tdp_pl1() or None
-        if tdp not in (None, "", 0):
+        draw = _amdgpu_ppt_w()
+        if draw is not None and tdp not in (None, "", 0):
+            self.fields["TDP"].set_value("%dW / %sW" % (draw, tdp))
+        elif draw is not None:
+            self.fields["TDP"].set_value("%dW" % draw)
+        elif tdp not in (None, "", 0):
             self.fields["TDP"].set_value("%sW" % tdp)
         cap = st.get("capacity")
         if cap is None:
@@ -1114,6 +1300,8 @@ class SettingsWindow(QMainWindow):
 
         self.hero = T.Hero("\uf0e7", "Settings", "Z13 power", theme)
         outer.addWidget(self.hero)
+        self.live = LiveStrip(theme)
+        outer.addWidget(self.live)
         outer.addWidget(T.HLine(theme))
 
         body = QHBoxLayout()

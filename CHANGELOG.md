@@ -1,36 +1,128 @@
 # What’s new in z13-power
 
-If you came from Windows, two things were missing on the Z13: the **Armory
-Crate button** did nothing, and there was no way to change power profiles
-**in a game** without alt-tabbing out of fullscreen.
+This is the drop that makes the Z13 on Linux feel like **G-Helper**, not
+like a tray icon with extra steps.
 
-That is in this drop. So is a tray that used to poke the hardware twelve
-times a minute and now sits quiet, a charge cap and undervolt that survive
-reboot, and a Tweaks page that finally looks like G-Helper.
+On **Omarchy**, power lives where your hand already goes: the stock
+battery widget. Click it. Charge, live watts, Max / Perf / Mid / Silent /
+Low, Automatic, Lock. No second bolt. No Armory Crate. No Windows.
 
-This is for every GZ302 on Linux — **CachyOS, Arch, Omarchy, KDE Plasma,
-Hyprland, X11 or Wayland.** You do not need Omarchy. You do not need KDE.
+On **CachyOS / KDE / anything else**, you still get the full Settings
+window — fan graph, live lighting, charge presets, live temp/fan/TDP —
+plus the Armory side button and a real in-game overlay. You do not need
+Omarchy. You do not need KDE.
+
+Same hardware story as before: the Armory Crate button finally does
+something, profiles change **inside** a gamescope game, the tray sits
+quiet instead of poking the chip twelve times a minute, and the charge
+cap survives reboot.
+
+This is for every **2025 GZ302** on Linux.
 
 ---
 
-## Omarchy — z13 pills on the stock battery widget
+## Omarchy — the battery widget *is* z13-power
 
-On Omarchy, install no longer leaves you with a second bolt icon.
-`z13-power-omarchy-setup` (run from `install.sh` when `~/.config/omarchy`
-exists) copies two user plugins and **replaces only the power slot**:
+Install no longer leaves a stray bolt next to the battery. 
+`z13-power-omarchy-setup` (from `install.sh` when `~/.config/omarchy`
+exists) copies two **user** plugins and replaces **only the power slot**:
 
-- **`z13.power`** — same battery flyout, plus Max / Perf / Mid / Silent /
-  Low, Automatic, and Lock. Stock `omarchy.power` is disabled, not deleted.
+- **`z13.power`** — the Omarchy battery flyout, plus our pills: Max,
+  Perf, Mid, Silent, Low, Automatic, and Lock.
 - **`z13.battery`** — low-battery warnings; skips Omarchy’s
-  `powerprofiles-set` while we own switching.
+  `powerprofiles-set` so plug/unplug is ours.
 
-Nothing in `/usr/share/omarchy` is touched. `omarchy update` does not
-remove the user plugins. `omarchy refresh shell` can put `omarchy.power`
-back; re-run `z13-power-omarchy-setup`. KDE / Cachy without Omarchy never
-load this; they keep the bolt tray. Profile-change toasts are skipped
-there — the flyout is the UI. Setup failures still notify.
+Stock `/usr/share/omarchy` is never edited. `omarchy update` does not
+delete the user plugins. `omarchy refresh shell` can put `omarchy.power`
+back; re-run `z13-power-omarchy-setup`. KDE and Cachy without Omarchy
+never load this. They keep the bolt tray.
+
+### The bar
+
+Default: live **battery glyph** (fill + charging) with the **profile
+glyph** beside it — same size, same color, same optical slot language as
+Bluetooth and Wi-Fi. No corner badge.
+
+Right-click: **percent + profile**. The battery shape drops (the number
+already is charge). Right-click again to go back.
+
+### Live TDP
+
+The flyout TDP row is **draw / cap**: `15W / 52W`. Live SoC watts from
+amdgpu PPT, polled only while the panel is open. The 52W is the profile
+limit we actually set (Mid, Perf, Max…).
+
+### Toasts that belong on Omarchy
+
+Flyout clicks do not pop a notification — the pills already moved. Plug
+in, unplug, or hit the low-battery latch and you get a compact Omarchy
+card (`omarchy-notification-send`): mode glyph, `Performance · AC`.
+Setup failures still notify. KDE still uses `notify-send` on every
+switch, because the bolt *is* the UI there.
+
+### Settings and Diagnose actually launch
+
+Those two flyout buttons now look in `~/.local/bin`, then `/usr/bin`,
+then PATH. From-source and packaged installs both work. Pills still
+talk through `command.json` so they never depend on PATH.
 
 ---
+
+## Settings — the G-Helper window
+
+Open Settings from the flyout, the bolt, or `z13-power settings`. Every
+page shares a live strip: **Temp · Fan · TDP** (`11W / 52W`), plus the
+big profile watts in the header.
+
+### Fan curve is a graph
+
+Eight firmware points on a real chart. Drag the dots. X is °C, Y is
+fan %. A dashed line is live APU temp. Above 75 W PL1, a yellow floor
+sits at 50% (the firmware rule). Fetch / Apply / Reset still there.
+No more eight PWM spinboxes.
+
+### Lighting is live
+
+Effect, color, speed, brightness, device — they apply as you click.
+There is no Apply button. **Turn off** stays.
+
+**Follow Omarchy theme** (Omarchy only — the button does not exist on
+KDE) paints the keyboard and lightbar with the current accent. Change
+theme, lights follow, until you pick a swatch.
+
+### Charge limit: 60 / 80 / 100
+
+Three pills above the slider, G-Helper style. Tap **80%** if you leave
+it plugged in. **100%** charges to full. The slider is still there for
+75%. Saved and re-applied at login — ACPI on this tablet forgets the
+cap across reboot.
+
+---
+
+## Armory, in a game, with Automatic
+
+The in-game overlay (Armory side button inside nested gamescope) now
+has **Auto** next to the TDP.
+
+- Auto on — follows the charger, same as the desktop flyout
+- Tap a pill — pin that profile (manual)
+- Tap Auto again — back to Automatic without leaving the game
+
+Esc, click outside the card, or Armory again to close.
+
+---
+
+## Diagnose does not yell at you
+
+`power-profiles-daemon` is **normal** on Omarchy and KDE. Diagnose no
+longer calls it a warning. If the hardware, groups, udev, daemon, and
+undervolt module are good, you get **All checks passed.** Each Diagnose
+click re-runs; it does not replay a stale report.
+
+---
+
+## Armory Crate button
+
 
 ## Armory Crate button
 
@@ -41,8 +133,9 @@ Windows and **do nothing** on Linux. Press it now:
   window stays on top, including over a fullscreen game that is *not*
   running inside gamescope.
 - **In a gamescope game** — a slim in-game profile picker: Max, Perf,
-  Mid, Silent, Low. Click a profile. Esc, click outside the card, or
-  Armory again to close. You never leave the game.
+  Mid, Silent, Low, plus **Auto**. Click a profile, or tap Auto to
+  follow the charger again. Esc, click outside the card, or Armory
+  again to close. You never leave the game.
 
 Same path z13gui used: the `z13ctl` daemon already watches the key and
 emits `gui-toggle`. Do not bind that key in your compositor — the daemon

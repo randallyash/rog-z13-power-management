@@ -158,7 +158,7 @@ class Overlay(QWidget):
 
         self.card = QWidget()
         self.card.setObjectName("panel")
-        self.card.setFixedSize(720, 196)
+        self.card.setFixedSize(720, 208)
 
         card = QVBoxLayout(self.card)
         card.setContentsMargins(22, 18, 22, 16)
@@ -177,6 +177,14 @@ class Overlay(QWidget):
         titles.addWidget(self.kicker)
         titles.addWidget(self.hero)
         head.addLayout(titles, 1)
+        self.auto_btn = QPushButton("Auto")
+        self.auto_btn.setCheckable(True)
+        self.auto_btn.setObjectName("auto")
+        self.auto_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.auto_btn.setFixedHeight(36)
+        self.auto_btn.setFixedWidth(72)
+        self.auto_btn.clicked.connect(self.toggle_auto)
+        head.addWidget(self.auto_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         head.addWidget(self.meta, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         card.addLayout(head)
 
@@ -193,7 +201,7 @@ class Overlay(QWidget):
             self.buttons[mode] = btn
         card.addLayout(row)
 
-        self.hint = QLabel("Click a profile · Armory or Esc to close")
+        self.hint = QLabel("Auto follows the charger · Armory or Esc to close")
         self.hint.setObjectName("hint")
         self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card.addWidget(self.hint)
@@ -260,10 +268,25 @@ class Overlay(QWidget):
                 border: 2px solid {t["accent"]};
                 color: {t["foreground"]};
             }}
+            QPushButton#auto {{
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 0.6px;
+            }}
         """)
 
     def pick(self, mode):
         send("mode", {"mode": mode})
+        QTimer.singleShot(150, self.refresh)
+
+    def toggle_auto(self):
+        st = read_status()
+        if st.get("automatic") is True:
+            mode = str(st.get("mode") or "")
+            if mode:
+                send("mode", {"mode": mode})
+        else:
+            send("automatic")
         QTimer.singleShot(150, self.refresh)
 
     def refresh(self):
@@ -272,8 +295,11 @@ class Overlay(QWidget):
         label = st.get("label") or mode or "—"
         tdp = st.get("tdp")
         auto = st.get("automatic") is True
-        self.hero.setText("%s · %s" % (label, "Auto" if auto else "Manual"))
+        self.hero.setText(str(label))
         self.meta.setText("" if tdp in (None, "") else "%sW" % tdp)
+        self.auto_btn.blockSignals(True)
+        self.auto_btn.setChecked(auto)
+        self.auto_btn.blockSignals(False)
         for key, btn in self.buttons.items():
             btn.setChecked(key == mode)
 
