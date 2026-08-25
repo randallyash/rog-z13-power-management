@@ -19,7 +19,7 @@ Column {
   property string fontFamily: bar ? bar.fontFamily : Style.font.family
   property var run: bar && typeof bar.run === "function" ? bar.run : function() {}
   // When true, hide the Power hero/stats — the host panel (omarchy.power)
-  // already shows battery. Only pills + Automatic + Lock + actions remain.
+  // already shows battery. Only pills + Automatic + Lock + fill + actions remain.
   property bool embedInPowerPanel: false
 
   property var status: ({
@@ -30,7 +30,9 @@ Column {
     ac: true,
     capacity: null,
     tdp: null,
-    profile: ""
+    profile: "",
+    fill_once: false,
+    charge_limit: null
   })
 
   // QML/JS only accepts \\uXXXX (4 hex digits). Nerd Font glyphs live
@@ -50,6 +52,17 @@ Column {
   readonly property string activeMode: String(status.mode || "performance")
   readonly property bool automatic: status.automatic === true
   readonly property bool locked: status.locked === true
+  readonly property bool fillOnce: status.fill_once === true
+  property var confChargeLimit: null
+  readonly property var chargeLimit: {
+    if (root.confChargeLimit !== null && root.confChargeLimit !== undefined)
+      return root.confChargeLimit
+    var n = status.charge_limit
+    if (n === undefined || n === null || n === "")
+      return null
+    var v = Number(n)
+    return isFinite(v) ? v : null
+  }
   readonly property bool onAc: status.ac === true
   readonly property var capacity: status.capacity
   readonly property string tdpLabel: status.tdp !== undefined && status.tdp !== null && status.tdp !== ""
@@ -104,6 +117,18 @@ Column {
     send("lock", { locked: !locked })
   }
 
+  function toggleFillOnce() {
+    send("fill", { fill: !fillOnce })
+  }
+
+  function parseChargeLimit(text) {
+    var m = String(text || "").match(/charge_limit\s*=\s*(\d+)/)
+    if (!m)
+      return null
+    var n = Number(m[1])
+    return isFinite(n) ? n : null
+  }
+
   function toggleDiagnose() {
     if (root.diagnoseOpen) {
       root.diagnoseOpen = false
@@ -132,15 +157,33 @@ Column {
     }
   }
 
+  FileView {
+    id: batteryFile
+    path: Quickshell.env("HOME") + "/.config/z13-power/battery.conf"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.confChargeLimit = root.parseChargeLimit(text())
+  }
+
   Timer {
     interval: 1000
     running: root.visible
     repeat: true
-    onTriggered: statusFile.reload()
+    onTriggered: {
+      statusFile.reload()
+      batteryFile.reload()
+    }
   }
 
-  Component.onCompleted: statusFile.reload()
-  onVisibleChanged: if (visible) statusFile.reload()
+  Component.onCompleted: {
+    statusFile.reload()
+    batteryFile.reload()
+  }
+  onVisibleChanged: if (visible) {
+    statusFile.reload()
+    batteryFile.reload()
+  }
 
   Process {
     id: cmdProc
@@ -339,6 +382,23 @@ Column {
     fontFamily: root.fontFamily
     opacity: root.automatic ? 0.45 : 1
     onClicked: if (!root.automatic) root.toggleLock()
+  }
+
+  Toggle {
+    width: parent.width
+    label: "Charge to 100%"
+    description: root.fillOnce
+      ? (root.chargeLimit !== null
+          ? "This plug-in only · returns to " + root.chargeLimit + "%"
+          : "This plug-in only · then the cap comes back")
+      : (root.chargeLimit !== null && root.chargeLimit < 100
+          ? "Lift the " + root.chargeLimit + "% cap for this plug-in"
+          : "Fill all the way this plug-in, then the cap returns")
+    checked: root.fillOnce
+    foreground: root.foreground
+    accent: root.accent
+    fontFamily: root.fontFamily
+    onClicked: root.toggleFillOnce()
   }
 
   Row {

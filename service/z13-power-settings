@@ -127,9 +127,21 @@ def load_charge_limit():
     return val if 40 <= val <= 100 else None
 
 
+def load_fill_once():
+    cfg = configparser.ConfigParser()
+    cfg.read(BATTERY_PATH)
+    try:
+        return cfg.getboolean("battery", "fill_once")
+    except (configparser.Error, ValueError, OSError):
+        return False
+
+
 def save_charge_limit(val):
     cfg = configparser.ConfigParser()
-    cfg["battery"] = {"charge_limit": str(val)}
+    cfg.read(BATTERY_PATH)
+    if not cfg.has_section("battery"):
+        cfg.add_section("battery")
+    cfg.set("battery", "charge_limit", str(val))
     os.makedirs(os.path.dirname(BATTERY_PATH), exist_ok=True)
     with open(BATTERY_PATH, "w") as f:
         cfg.write(f)
@@ -861,7 +873,9 @@ class BatteryTab(QWidget):
 
         v.addWidget(T.Note(
             "100% removes the limit (charge to full). Saved to battery.conf "
-            "and re-applied at login — ACPI does not keep it across reboot.",
+            "and re-applied at login — ACPI does not keep it across reboot. "
+            "The flyout Charge to 100% toggle fills this plug-in only, then "
+            "this cap comes back.",
             theme))
 
         self.msg = T.StatusLine(theme)
@@ -913,6 +927,13 @@ class BatteryTab(QWidget):
     def apply(self):
         val = self.slider.value()
         save_charge_limit(val)
+        if load_fill_once():
+            self.msg.set_result(
+                True,
+                "Saved %d%%. Filling to 100%% this plug-in, then that cap returns."
+                % val)
+            self.refresh()
+            return
         ok = _write_sysfs(BAT_LIMIT_PATH, val)
         if not ok:
             r = z13ctl(["batterylimit", "--set", str(val)])

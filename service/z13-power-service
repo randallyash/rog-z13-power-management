@@ -12,6 +12,8 @@
 #     power-source change and return to Automatic
 #   - "Lock profile": a manual pick survives power changes (low battery still
 #     forces the safety profile, then restores your locked pick)
+#   - "Charge to 100%": one-shot fill this plug-in; saved cap is unchanged
+#     and returns when the pack is full or the charger is pulled
 #   - "Settings…": opens the settings window; its Profiles tab edits the
 #     service config ("Open config file…" exposes the raw file)
 #   - Armoury Crate button (KEY_PROG3 via z13ctl gui-toggle): toggle settings
@@ -77,10 +79,13 @@ except (ImportError, AttributeError):
 CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
 BATTERY_PATH = os.path.expanduser("~/.config/z13-power/battery.conf")
+CHARGE_LIMIT_PATH = "/sys/class/power_supply/BAT0/charge_control_end_threshold"
 TWEAKS_PATH = os.path.expanduser("~/.config/z13-power/tweaks.conf")
 STATE_DIR = os.path.expanduser("~/.local/state/z13-power")
 STATUS_PATH = os.path.join(STATE_DIR, "status.json")
 COMMAND_PATH = os.path.join(STATE_DIR, "command.json")
+# Capacity at which a fill-to-100 one-shot is done (some packs never report 100).
+FILL_DONE_CAPACITY = 99
 
 MODES = {
     "performance": "Performance",
@@ -542,31 +547,87 @@ def apply_saved_lighting():
     z13ctl(args)
 
 
-def apply_saved_charge_limit():
-    """Re-apply the charge cap; ACPI does not keep it across reboot on this unit."""
+def load_battery_conf():
+    """Return (saved charge_limit or None, fill_once bool)."""
+    cfg = configparser.ConfigParser()
+    cfg.read(BATTERY_PATH)
+    limit = None
+    fill_once = False
+    if cfg.has_section("battery"):
+        try:
+            limit = int(cfg.get("battery", "charge_limit").strip())
+            if not (40 <= limit <= 100):
+                limit = None
+        except (configparser.Error, ValueError):
+            limit = None
+        try:
+            fill_once = cfg.getboolean("battery", "fill_once")
+        except (configparser.Error, ValueError):
+            fill_once = False
+    return limit, fill_once
+
+
+def save_battery_conf(*, limit=None, fill_once=None):
+    """Update battery.conf keys without wiping the others."""
     cfg = configparser.ConfigParser()
     cfg.read(BATTERY_PATH)
     if not cfg.has_section("battery"):
-        return
+        cfg.add_section("battery")
+    if limit is not None:
+        cfg.set("battery", "charge_limit", str(int(limit)))
+    if fill_once is not None:
+        cfg.set("battery", "fill_once", "true" if fill_once else "false")
+    os.makedirs(os.path.dirname(BATTERY_PATH), exist_ok=True)
+    tmp = BATTERY_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        cfg.write(f)
+    os.replace(tmp, BATTERY_PATH)
+
+
+def read_charge_threshold():
     try:
-        limit = int(cfg.get("battery", "charge_limit").strip())
-    except (configparser.Error, ValueError):
-        return
-    if not (40 <= limit <= 100):
-        return
-    path = "/sys/class/power_supply/BAT0/charge_control_end_threshold"
-    try:
-        with open(path) as f:
-            if int(f.read().strip()) == limit:
-                return
+        with open(CHARGE_LIMIT_PATH) as f:
+            return int(f.read().strip())
     except (OSError, ValueError):
-        pass
+        return None
+
+
+def write_charge_threshold(limit):
+    if limit is None:
+        return False
     try:
-        with open(path, "w") as f:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        return False
+    if not (40 <= limit <= 100):
+        return False
+    if read_charge_threshold() == limit:
+        return True
+    try:
+        with open(CHARGE_LIMIT_PATH, "w") as f:
             f.write(str(limit))
-        return
+        return True
     except OSError:
-        z13ctl(["batterylimit", "--set", str(limit)])
+        r = z13ctl(["batterylimit", "--set", str(limit)])
+        return r is not None and r.returncode == 0
+
+
+def apply_saved_charge_limit():
+    """Re-apply the charge cap; ACPI does not keep it across reboot.
+
+    A live fill-to-100 one-shot lifts the hardware cap to 100 until the pack
+    is full or the charger is pulled. The saved charge_limit is unchanged.
+    """
+    limit, fill_once = load_battery_conf()
+    if fill_once:
+        ac, capacity = read_power()
+        if ac and (capacity is None or capacity < FILL_DONE_CAPACITY):
+            write_charge_threshold(100)
+            return
+        save_battery_conf(fill_once=False)
+    if limit is None:
+        return
+    write_charge_threshold(limit)
 
 
 _tweaks_mtime = None
@@ -1748,6 +1809,8 @@ class Service:
             self._cfg_watcher.addPath(cfg_dir)
         if os.path.exists(CONFIG_PATH):
             self._cfg_watcher.addPath(CONFIG_PATH)
+        if os.path.exists(BATTERY_PATH):
+            self._cfg_watcher.addPath(BATTERY_PATH)
         self._cfg_watcher.fileChanged.connect(self._on_config_changed)
         self._cfg_watcher.directoryChanged.connect(self._on_config_changed)
         if self.sni is not None and not self.automatic:
@@ -2012,6 +2075,7 @@ class Service:
         self._apply_power_state(ac, capacity, why="power")
 
     def _apply_power_state(self, ac, capacity, why="user"):
+        self._tick_fill_once(ac, capacity)
         low = not ac and capacity is not None and capacity <= self.cfg["low_battery"]
         if low:
             # Safety rule: low battery forces the configured profile.
@@ -2169,6 +2233,7 @@ class Service:
     def write_status(self, mode=None):
         mode = mode if mode in MODE_ORDER else self._ui_mode()
         ac, capacity = read_power()
+        limit, fill_once = load_battery_conf()
         payload = {
             "mode": mode,
             "label": MODES.get(mode, mode),
@@ -2178,6 +2243,8 @@ class Service:
             "capacity": capacity,
             "tdp": self._mode_pl1(mode),
             "profile": self.last_profile or self.last_fw_profile or "",
+            "charge_limit": limit,
+            "fill_once": bool(fill_once),
         }
         if payload == self._status_payload:
             return
@@ -2198,11 +2265,19 @@ class Service:
         except OSError:
             pass
 
-    def _on_config_changed(self, _path=""):
+    def _on_config_changed(self, path=""):
         if os.path.exists(CONFIG_PATH) and CONFIG_PATH not in self._cfg_watcher.files():
             self._cfg_watcher.addPath(CONFIG_PATH)
+        if os.path.exists(BATTERY_PATH) and BATTERY_PATH not in self._cfg_watcher.files():
+            self._cfg_watcher.addPath(BATTERY_PATH)
+        name = os.path.basename(path) if path else ""
+        if name.startswith("battery.conf"):
+            apply_saved_charge_limit()
+            self.write_status()
+            return
         self.cfg = load_config(force=True)
         self.evaluate_power()
+        self.write_status()
 
     def _on_command_path(self, _path=""):
         if os.path.exists(COMMAND_PATH) and COMMAND_PATH not in self._cmd_watcher.files():
@@ -2232,6 +2307,11 @@ class Service:
                 locked = not self.locked
             if not self.automatic:
                 self.on_lock_toggled(bool(locked))
+        elif op == "fill":
+            enabled = data.get("fill")
+            if enabled is None:
+                enabled = not load_battery_conf()[1]
+            self.set_fill_once(bool(enabled))
         elif op == "settings":
             self.toggle_settings()
         elif op == "settings-open":
@@ -2300,12 +2380,52 @@ class Service:
             box.setStyleSheet(self._theme_mod.stylesheet(self._theme))
         box.exec()
 
+    def set_fill_once(self, enabled):
+        """Lift the hardware cap to 100 for this plug-in; saved cap stays put."""
+        enabled = bool(enabled)
+        limit, current = load_battery_conf()
+        if not enabled:
+            if current:
+                save_battery_conf(fill_once=False)
+            if limit is not None:
+                write_charge_threshold(limit)
+            self.write_status()
+            return
+        ac, capacity = read_power()
+        if ac and capacity is not None and capacity >= FILL_DONE_CAPACITY:
+            if current:
+                save_battery_conf(fill_once=False)
+            if limit is not None:
+                write_charge_threshold(limit)
+            self.write_status()
+            return
+        if not current:
+            save_battery_conf(fill_once=True)
+        if ac:
+            write_charge_threshold(100)
+        self.write_status()
+
+    def _tick_fill_once(self, ac, capacity):
+        """End the one-shot on unplug or full; keep 100 while this charge runs."""
+        limit, fill_once = load_battery_conf()
+        if not fill_once:
+            return
+        if (not ac) or (capacity is not None and capacity >= FILL_DONE_CAPACITY):
+            save_battery_conf(fill_once=False)
+            if limit is not None:
+                write_charge_threshold(limit)
+            self.write_status()
+            return
+        if ac:
+            write_charge_threshold(100)
+
     def on_poll(self):
-        ac, _capacity = read_power()
+        ac, capacity = read_power()
         if ac != self.last_ac:
             # udev sometimes misses USB-C; don't wait for the 30s safety timer.
             self.evaluate_power()
             return
+        self._tick_fill_once(ac, capacity)
         fw = firmware_profile()
         if not fw or fw == self.last_fw_profile:
             return

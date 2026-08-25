@@ -92,6 +92,8 @@ modes:
   automatic    return the tray service to Automatic (per power state)
   lock         lock the current manual profile
   unlock       unlock the current profile
+  fill         charge to 100% this plug-in, then restore the saved cap
+  unfill       cancel fill-to-100 and restore the saved cap
   status       show current profile / TDP / fan curve / undervolt
   settings     open the settings window (lighting, fan curve, battery, power)
   diagnose     check z13 setup (hardware, perms, daemon, modules) and show fixes
@@ -352,6 +354,12 @@ case "${1:-}" in
     ;;
   unlock)
     service_cmd '{"op":"lock","locked":false}'
+    ;;
+  fill)
+    service_cmd '{"op":"fill","fill":true}'
+    ;;
+  unfill)
+    service_cmd '{"op":"fill","fill":false}'
     ;;
   cmd)
     service_cmd "${2:-{}}"

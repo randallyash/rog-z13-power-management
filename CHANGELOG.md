@@ -28,7 +28,7 @@ Install no longer leaves a stray bolt next to the battery.
 exists) copies two **user** plugins and replaces **only the power slot**:
 
 - **`z13.power`** — the Omarchy battery flyout, plus our pills: Max,
-  Perf, Mid, Silent, Low, Automatic, and Lock.
+  Perf, Mid, Silent, Low, Automatic, Lock, and Charge to 100%.
 - **`z13.battery`** — low-battery warnings; skips Omarchy’s
   `powerprofiles-set` so plug/unplug is ours.
 
@@ -45,6 +45,14 @@ Bluetooth and Wi-Fi. No corner badge.
 
 Right-click: **percent + profile**. The battery shape drops (the number
 already is charge). Right-click again to go back.
+
+### Charge to 100%
+
+The flyout toggle **Charge to 100%** is a one-shot. Your saved cap
+stays 80% (or 60, or whatever you set). This plug-in is allowed to go
+all the way to full. When the pack hits ~100% — or when you unplug —
+the cap snaps back. Next charge stops at 80 again. Settings still
+owns the lasting limit; the toggle does not rewrite it.
 
 ### Live TDP
 
