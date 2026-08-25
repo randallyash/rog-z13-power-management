@@ -27,7 +27,8 @@ exists) copies two user plugins and **replaces only the power slot**:
 Nothing in `/usr/share/omarchy` is touched. `omarchy update` does not
 remove the user plugins. `omarchy refresh shell` can put `omarchy.power`
 back; re-run `z13-power-omarchy-setup`. KDE / Cachy without Omarchy never
-load this; they keep the bolt tray.
+load this; they keep the bolt tray. Profile-change toasts are skipped
+there — the flyout is the UI. Setup failures still notify.
 
 ---
 

@@ -16,7 +16,7 @@
 #     service config ("Open config file…" exposes the raw file)
 #   - Armoury Crate button (KEY_PROG3 via z13ctl gui-toggle): toggle settings
 #   - re-applies saved lighting and charge limit at login
-#   - notifies (notify-send) on every switch and on external profile changes
+#   - notifies (notify-send) on switches; skipped on Omarchy (flyout is the UI)
 #
 # Config: ~/.config/z13-power/service.conf — every z13ctl call the service makes
 # (profile, TDP limits, fan curve, undervolt) is defined there, per mode.
@@ -449,7 +449,11 @@ def apply_mode(mode_def, force=False):
     return True
 
 
-def notify(summary, body):
+def notify(summary, body, *, important=False):
+    # Omarchy's z13.power flyout is the UI; left-click cycle is gone. Skip
+    # the "now Performance" toasts there. Errors still get through.
+    if not important and _omarchy_power_panel_owns_ui():
+        return
     try:
         subprocess.run(
             ["notify-send", "-a", "z13-power", "-i", "preferences-system-power",
@@ -1632,7 +1636,8 @@ class Service:
         if desktop_needs_sni():
             if not _DBUS_NEXT_OK:
                 notify("z13-power",
-                       "python-dbus-next missing — tray menu unavailable")
+                       "python-dbus-next missing — tray menu unavailable",
+                       important=True)
             else:
                 self.sni = SniTray()
                 self.sni.mode_clicked.connect(self.manual)
@@ -1737,7 +1742,8 @@ class Service:
         self.sni = None
         self.tray.show()
         notify("z13-power tray",
-               f"Menu backend unavailable ({reason}); using the fallback tray")
+               f"Menu backend unavailable ({reason}); using the fallback tray",
+               important=True)
 
     def startup_diagnose(self):
         """Cheap PATH/sysfs checks — no z13ctl. Full report is Diagnose."""
@@ -1765,7 +1771,8 @@ class Service:
             fails.append("[FAIL] sysfs: platform-profile not writable")
         if fails:
             notify("z13-power: setup problem",
-                   " · ".join(fails) + " — run 'z13-power diagnose'")
+                   " · ".join(fails) + " — run 'z13-power diagnose'",
+                   important=True)
 
     def on_activated(self, reason):
         # Qt QSystemTrayIcon path (KDE, or any X11 desktop). On KDE the shell
@@ -1970,7 +1977,8 @@ class Service:
         """Apply a mode; notify only when it actually changed (or force)."""
         mode_def = self.cfg["modes"].get(mode) or DEFAULT_MODES[mode]
         if not apply_mode(mode_def, force=force):
-            notify("Power profile error", f"Failed to apply '{mode}'")
+            notify("Power profile error", f"Failed to apply '{mode}'",
+                   important=True)
             return False
         self.last_fw_profile = firmware_profile()
         self.last_profile = self.last_fw_profile or mode_def.get("profile", "")
@@ -2195,7 +2203,8 @@ class Service:
         try:
             subprocess.Popen([cmd])
         except OSError:
-            notify("z13-power", "z13-power-settings not found in PATH")
+            notify("z13-power", "z13-power-settings not found in PATH",
+                   important=True)
 
     def show_diagnose(self):
         from PyQt6.QtWidgets import QMessageBox
