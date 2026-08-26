@@ -1,0 +1,5 @@
+# z13-power: asus-armoury PPT (the limits the APU actually obeys).
+# z13ctl's 99-z13ctl.rules chmods WMI ppt_* and armoury boot_sound / panel_overdrive,
+# but not these firmware-attributes. Without them, Quiet's 20W write is a no-op
+# and the chip stays at Armoury 60/75/86W.
+ACTION=="add", SUBSYSTEM=="firmware-attributes", KERNEL=="asus-armoury", RUN+="/bin/sh -c 'for a in ppt_pl1_spl ppt_pl2_sppt ppt_pl3_fppt; do f=/sys/class/firmware-attributes/asus-armoury/attributes/$$a/current_value; [ -e \"$$f\" ] && chgrp users \"$$f\" && chmod g+w \"$$f\"; done'"

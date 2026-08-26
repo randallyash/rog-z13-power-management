@@ -34,24 +34,25 @@ from PyQt6.QtWidgets import (QApplication, QColorDialog, QFrame,
                              QSizePolicy, QSlider, QSpinBox, QStackedWidget,
                              QVBoxLayout, QWidget)
 
-def _theme_mod():
+def _add_share_path():
     here = os.path.dirname(os.path.realpath(__file__))
     for path in (here, "/usr/share/z13-power-management",
                  os.path.expanduser("~/.local/bin")):
-        if os.path.isfile(os.path.join(path, "z13_power_theme.py")):
+        if os.path.isfile(os.path.join(path, "z13_power_common.py")):
             if path not in sys.path:
                 sys.path.insert(0, path)
-            break
-    import z13_power_theme
-    return z13_power_theme
+            return
 
-LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
-CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
-BATTERY_PATH = os.path.expanduser("~/.config/z13-power/battery.conf")
-TWEAKS_PATH = os.path.expanduser("~/.config/z13-power/tweaks.conf")
-STATUS_PATH = os.path.expanduser("~/.local/state/z13-power/status.json")
+
+_add_share_path()
+from z13_power_common import (  # noqa: E402
+    CHARGE_LIMIT_PATH as BAT_LIMIT_PATH, CONFIG_PATH,
+    LIGHTING_PATH, STATUS_PATH, TWEAKS_PATH,
+    load_charge_limit, load_fill_once, save_charge_limit,
+    theme_mod as _theme_mod, z13ctl,
+)
+
 ASUS_WMI = "/sys/devices/platform/asus-nb-wmi"
-BAT_LIMIT_PATH = "/sys/class/power_supply/BAT0/charge_control_end_threshold"
 BAT_CAPACITY_PATH = "/sys/class/power_supply/BAT0/capacity"
 
 LIGHTING_MODES = ["static", "breathe", "cycle", "rainbow", "strobe", "off"]
@@ -75,7 +76,7 @@ DEFAULT_LIGHTING = {
 MODE_OPTIONS = [
     ("performance", "Performance"),
     ("balanced", "Balanced"),
-    ("silent", "Silent"),
+    ("silent", "Quiet"),
     ("max", "Max"),
     ("lowpower", "Low power"),
 ]
@@ -89,15 +90,6 @@ NAV = [
     ("profiles", "Profiles", "\U000f062e"),
     ("telemetry", "Telemetry", "\U000f012a"),
 ]
-
-
-def z13ctl(args, timeout=30):
-    """Run a z13ctl command; return the CompletedProcess or None."""
-    try:
-        return subprocess.run(["z13ctl", *args], capture_output=True,
-                              text=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError):
-        return None
 
 
 # ── lighting config ──────────────────────────────────────────────────────────
@@ -115,36 +107,6 @@ def load_lighting():
             except configparser.Error:
                 pass
     return out
-
-
-def load_charge_limit():
-    cfg = configparser.ConfigParser()
-    cfg.read(BATTERY_PATH)
-    try:
-        val = int(cfg.get("battery", "charge_limit").strip())
-    except (configparser.Error, ValueError, OSError):
-        return None
-    return val if 40 <= val <= 100 else None
-
-
-def load_fill_once():
-    cfg = configparser.ConfigParser()
-    cfg.read(BATTERY_PATH)
-    try:
-        return cfg.getboolean("battery", "fill_once")
-    except (configparser.Error, ValueError, OSError):
-        return False
-
-
-def save_charge_limit(val):
-    cfg = configparser.ConfigParser()
-    cfg.read(BATTERY_PATH)
-    if not cfg.has_section("battery"):
-        cfg.add_section("battery")
-    cfg.set("battery", "charge_limit", str(val))
-    os.makedirs(os.path.dirname(BATTERY_PATH), exist_ok=True)
-    with open(BATTERY_PATH, "w") as f:
-        cfg.write(f)
 
 
 def load_undervolt():

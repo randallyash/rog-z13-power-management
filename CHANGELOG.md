@@ -4,7 +4,7 @@ This is the drop that makes the Z13 Power on Linux feel like **Godmode**, not
 like a tray icon with extra steps.
 
 On **Omarchy**, power lives where your hand already goes: the stock
-battery widget. Click it. Charge, live watts, Max / Perf / Mid / Silent /
+battery widget. Click it. Charge, live watts, Max / Perf / Mid / Quiet /
 Low, Automatic, Lock. No second bolt. No Armory Crate. No Windows.
 
 On **CachyOS / KDE / anything else**, you still get the full Settings
@@ -28,7 +28,7 @@ Install no longer leaves a stray bolt next to the battery.
 exists) copies two **user** plugins and replaces **only the power slot**:
 
 - **`z13.power`** — the Omarchy battery flyout, plus our pills: Max,
-  Perf, Mid, Silent, Low, Automatic, Lock, and Charge to 100%.
+  Perf, Mid, Quiet, Low, Automatic, Lock, and Charge to 100%.
 - **`z13.battery`** — low-battery warnings; skips Omarchy’s
   `powerprofiles-set` so plug/unplug is ours.
 
@@ -54,11 +54,31 @@ all the way to full. When the pack hits ~100% — or when you unplug —
 the cap snaps back. Next charge stops at 80 again. Settings still
 owns the lasting limit; the toggle does not rewrite it.
 
-### Live TDP
+### Live TDP and temp
 
 The flyout TDP row is **draw / cap**: `15W / 52W`. Live SoC watts from
-amdgpu PPT, polled only while the panel is open. The 52W is the profile
-limit we actually set (Mid, Perf, Max…).
+amdgpu PPT, polled only while the panel is open. If you ever see
+`52W / 20W`, the left number is the chip and the right is the recipe —
+the cap did not take. **Temp** replaced the useless battery-size row.
+Charge limit shows the cap you set (`80%`), not UPower’s 75–80
+hysteresis. Sitting at the cap still rotates the Omarchy lines
+(Pumping power / Bleeding amps); it does not freeze on “Threshold”.
+
+### Quiet is 20 watts. For real.
+
+ASUS firmware **Quiet** pins the SMU at about **40W** and ignores the
+Linux PPT knobs. `z13ctl tdp --get` still said 20. The flyout said 20.
+The chip was at 40. asusd then saw firmware Balanced (the only profile
+where 20W *can* bind) and stuffed **Mid’s 52W** into the SMU while
+leaving sysfs at 20.
+
+Our Quiet pill now: firmware Balanced, **PL1 = PL2 = PL3 = 20**,
+Armoury PPT written so asusd does not restore 60/75/86, and a poll that
+re-writes 20W even when the knobs already show 20. The name is Quiet.
+The BIOS name is not. Custom fan curves on this GZ302 floor around
+3400 RPM and run *louder* than firmware auto — we do not use them.
+
+The mute glyph is gone. Quiet is a moon, not volume-off.
 
 ### Toasts that belong on Omarchy
 
@@ -141,7 +161,7 @@ Windows and **do nothing** on Linux. Press it now:
   window stays on top, including over a fullscreen game that is *not*
   running inside gamescope.
 - **In a gamescope game** — a slim in-game profile picker: Max, Perf,
-  Mid, Silent, Low, plus **Auto**. Click a profile, or tap Auto to
+  Mid, Quiet, Low, plus **Auto**. Click a profile, or tap Auto to
   follow the charger again. Esc, click outside the card, or Armory
   again to close. You never leave the game.
 

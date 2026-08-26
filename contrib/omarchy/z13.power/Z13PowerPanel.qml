@@ -43,7 +43,7 @@ Column {
     { id: "max", label: "Max", icon: glyph(0xF0E7) },
     { id: "performance", label: "Perf", icon: glyph(0xF04C5) },
     { id: "balanced", label: "Mid", icon: glyph(0xF04BA) },
-    { id: "silent", label: "Silent", icon: glyph(0xF075F) },
+    { id: "silent", label: "Quiet", icon: glyph(0xF0594) },
     { id: "lowpower", label: "Low", icon: glyph(0xF0331) }
   ]
   readonly property string settingsGlyph: glyph(0xF0493)

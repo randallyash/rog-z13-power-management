@@ -4,7 +4,7 @@
   "name": "Z13 Power",
   "version": "1.0.0",
   "author": "z13-power",
-  "description": "Omarchy battery flyout with z13-power profiles (Max/Perf/Mid/Silent/Low)",
+  "description": "Omarchy battery flyout with z13-power profiles (Max/Perf/Mid/Quiet/Low)",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "Panel.qml"

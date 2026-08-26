@@ -19,7 +19,7 @@ plain Qt + z13ctl + systemd, so it works on any desktop (KDE Plasma, and
 Hyprland/Omarchy, whose bar already ships an SNI tray + notification daemon).
 Only the optional display/DPMS config (`powerdevilrc`, `z13-power-config`) is
 Plasma-specific. TDP / undervolt defaults are silicon-lottery values from
-the original unit — other GZ302s may need milder Silent / Low undervolt.
+the original unit — other GZ302s may need milder Quiet / Low undervolt.
 Packaged as `z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
 
 ## Layout
@@ -27,6 +27,7 @@ Packaged as `z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
 - `scripts/z13-power` — mode CLI (applies profiles SILENTLY; no notifications)
 - `service/z13-power-service` — tray + watcher (PyQt6): the only notifier
 - `service/z13-power-settings` — settings window (PyQt6): z13gui replacement
+- `service/z13_power_common.py` — shared paths, z13ctl, battery.conf / charge cap
 - `service/z13-power-overlay` — slim in-game profile picker for nested gamescope
 - `service/z13-power-service.service` — systemd user unit (graphical-session.target)
 - `contrib/z13-power-config` — deploys display-only powerdevilrc (KDE Plasma only;
@@ -157,11 +158,12 @@ clears on a live AC/battery change.
   `~/.local/bin/z13-power-settings` so a from-source install wins over
   the packaged `/usr/bin` copy.
 - **Panel IPC**: `~/.local/state/z13-power/status.json` (mode, automatic,
-  locked, ac, capacity, tdp, profile) written from `update_tray`.
-  `command.json` (`op=mode|automatic|lock`) is consumed by a directory
-  watcher. `z13-power` CLI forwards mode/automatic/lock to that file when
-  the service is active. `contrib/omarchy/Z13PowerPanel.qml` is the Omarchy
-  flyout that uses it.
+  locked, ac, capacity, tdp, profile, charge_limit, fill_once) written from
+  `update_tray`. `command.json` (`op=mode|automatic|lock|fill`) is consumed
+  by a directory watcher. `z13-power` CLI forwards mode/automatic/lock/fill
+  to that file when the service is active.
+  `contrib/omarchy/z13.power/Z13PowerPanel.qml` is the Omarchy flyout that
+  uses it.
 - **Notifications**: `notify-send` on every switch + external change. Single
   notifier — `z13-power` itself is silent.
 - Service PATH (systemd) does NOT include `~/.local/bin` — resolves z13-power
@@ -230,8 +232,8 @@ clears on a live AC/battery change.
   must be installed or DKMS cannot build. (z13gui-bin was dropped when the
   settings window replaced it.)
 - package(): installs z13-power, z13-power-service, z13-power-settings,
-  z13_power_theme.py, contrib/ryzen-smu udev + modules-load, systemd user
-  unit, z13-power-config, powerdevilrc, LICENSE.
+  z13_power_theme.py, z13_power_common.py, contrib/ryzen-smu udev +
+  modules-load, systemd user unit, z13-power-config, powerdevilrc, LICENSE.
 - The packaged service's `.install` hook: enable+start on install;
   daemon-reload + restart on upgrade (new code deploys without re-login);
   stop+disable+cleanup on remove. Re-enters the user manager via
@@ -247,7 +249,7 @@ clears on a live AC/battery change.
 ## Per-unit tuning caveat
 
 Undervolt (-20/-25 mV) and TDP (5–93 W) are silicon-lottery values from the
-original unit. Other GZ302s may need milder Silent / Low undervolt (Tweaks
+original unit. Other GZ302s may need milder Quiet / Low undervolt (Tweaks
 slider, or `undervolt=` in `scripts/z13-power` / `service.conf`). See README
 caveats.
 

@@ -4,7 +4,7 @@ Same z13-power repo. KDE / Cachy without Omarchy never load this.
 
 ## Packaged plugins
 
-- `z13.power` — Omarchy **battery** bar widget with our Max/Perf/Mid/Silent/Low
+- `z13.power` — Omarchy **battery** bar widget with our Max/Perf/Mid/Quiet/Low
   pills, Automatic, Lock, and Charge to 100% (`embedInPowerPanel`). Replaces
   the `omarchy.power` **slot only** — not the rest of the bar.
 - `z13.battery` — low-battery warnings; skips `omarchy-powerprofiles-set` when

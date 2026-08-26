@@ -49,7 +49,7 @@ function modeGlyph(id) {
   if (id === "max") return String.fromCodePoint(0xF0E7)
   if (id === "performance") return String.fromCodePoint(0xF04C5)
   if (id === "balanced") return String.fromCodePoint(0xF04BA)
-  if (id === "silent") return String.fromCodePoint(0xF075F)
+  if (id === "silent") return String.fromCodePoint(0xF0594)
   if (id === "lowpower") return String.fromCodePoint(0xF0331)
   return ""
 }

@@ -50,18 +50,25 @@ from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 import pyudev
 
-def _theme_mod():
-    """Load z13_power_theme from beside this script or the share dir."""
+def _add_share_path():
     here = os.path.dirname(os.path.realpath(__file__))
     for path in (here, "/usr/share/z13-power-management",
                  os.path.expanduser("~/.local/bin")):
-        if os.path.isfile(os.path.join(path, "z13_power_theme.py")):
+        if os.path.isfile(os.path.join(path, "z13_power_common.py")):
             if path not in sys.path:
                 sys.path.insert(0, path)
-            break
-    import z13_power_theme
-    return z13_power_theme
+            return
 
+
+_add_share_path()
+from z13_power_common import (  # noqa: E402
+    BATTERY_PATH, CONFIG_PATH, FILL_DONE_CAPACITY,
+    LIGHTING_PATH, STATE_DIR, STATUS_PATH, TWEAKS_PATH,
+    apply_saved_charge_limit, load_battery_conf, read_power,
+    save_battery_conf, theme_mod as _theme_mod, write_armoury_ppt,
+    write_charge_threshold, write_wmi_ppt, read_wmi_pl1, z13ctl, z13ctl_ok,
+)
+COMMAND_PATH = os.path.join(STATE_DIR, "command.json")
 
 try:
     from dbus_next import (DBusError, Message, MessageType, PropertyAccess,
@@ -76,21 +83,10 @@ except (ImportError, AttributeError):
     # incompatibility the service keeps working with the classic Qt tray.
     _DBUS_NEXT_OK = False
 
-CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
-LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
-BATTERY_PATH = os.path.expanduser("~/.config/z13-power/battery.conf")
-CHARGE_LIMIT_PATH = "/sys/class/power_supply/BAT0/charge_control_end_threshold"
-TWEAKS_PATH = os.path.expanduser("~/.config/z13-power/tweaks.conf")
-STATE_DIR = os.path.expanduser("~/.local/state/z13-power")
-STATUS_PATH = os.path.join(STATE_DIR, "status.json")
-COMMAND_PATH = os.path.join(STATE_DIR, "command.json")
-# Capacity at which a fill-to-100 one-shot is done (some packs never report 100).
-FILL_DONE_CAPACITY = 99
-
 MODES = {
     "performance": "Performance",
     "balanced": "Balanced",
-    "silent": "Silent",
+    "silent": "Quiet",
     "max": "Max",
     "lowpower": "Low power",
 }
@@ -99,7 +95,7 @@ MODE_GLYPHS = {
     "max": "\uf0e7",
     "performance": "\U000f04c5",
     "balanced": "\U000f04ba",
-    "silent": "\U000f075f",
+    "silent": "\U000f0594",
     "lowpower": "\U000f0331",
 }
 # Overwritten from the live Omarchy theme in main(); these are the
@@ -117,7 +113,8 @@ DEFAULT_MODES = {
                     "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
     "balanced": {"profile": "balanced", "tdp": "52 71 70",
                  "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
-    "silent": {"profile": "quiet", "tdp": "20 40 40",
+    # Firmware "quiet" pins SMU ~40W and ignores PPT. Balanced + hard 20W.
+    "silent": {"profile": "balanced", "tdp": "20 20 20",
                "tdp_force": "false", "fancurve": "reset", "undervolt": "-20"},
     "max": {"profile": "performance", "tdp": "93",
             "tdp_force": "true", "undervolt": "reset"},
@@ -163,7 +160,7 @@ on_low_battery = silent
 #  [modes.<name>] — what the service runs for each profile mode.
 #
 #  profile     Firmware profile written to platform_profile (asus-wmi):
-#                quiet        — Silent/Eco mode (low power, low noise)
+#                quiet        — Quiet mode (low fans, low power)
 #                balanced     — Balanced mode (default)
 #                performance  — Turbo mode (maximum performance)
 #
@@ -222,8 +219,9 @@ fancurve = reset
 undervolt = reset
 
 [modes.silent]
-profile = quiet
-tdp = 20 40 40
+# Not firmware "quiet": that profile pins ~40W and ignores PPT.
+profile = balanced
+tdp = 20 20 20
 tdp_force = false
 fancurve = reset
 undervolt = -20
@@ -237,69 +235,6 @@ undervolt = -25
 """
 
 
-_ac_online_path = None
-_bat_capacity_path = None
-
-
-def _discover_power_paths():
-    """Resolve AC/battery sysfs files once; retry if a path disappears."""
-    global _ac_online_path, _bat_capacity_path
-    _ac_online_path = None
-    _bat_capacity_path = None
-    try:
-        names = os.listdir("/sys/class/power_supply")
-    except OSError:
-        return
-    for d in names:
-        base = os.path.join("/sys/class/power_supply", d)
-        if not os.path.isdir(base):
-            continue
-        if _ac_online_path is None and (
-                d in ("AC", "ACAD", "AC0") or d.startswith("ADP")):
-            path = os.path.join(base, "online")
-            if os.path.isfile(path):
-                _ac_online_path = path
-        elif _bat_capacity_path is None and d.startswith("BAT"):
-            path = os.path.join(base, "capacity")
-            if os.path.isfile(path):
-                _bat_capacity_path = path
-        if _ac_online_path and _bat_capacity_path:
-            return
-
-
-def read_power():
-    """Return (ac_online: bool, capacity: int|None)."""
-    if _ac_online_path is None and _bat_capacity_path is None:
-        _discover_power_paths()
-    ac = False
-    capacity = None
-    if _ac_online_path:
-        try:
-            with open(_ac_online_path) as f:
-                ac = f.read().strip() == "1"
-        except OSError:
-            _discover_power_paths()
-            if _ac_online_path:
-                try:
-                    with open(_ac_online_path) as f:
-                        ac = f.read().strip() == "1"
-                except OSError:
-                    pass
-    if _bat_capacity_path:
-        try:
-            with open(_bat_capacity_path) as f:
-                capacity = int(f.read().strip())
-        except (OSError, ValueError):
-            _discover_power_paths()
-            if _bat_capacity_path:
-                try:
-                    with open(_bat_capacity_path) as f:
-                        capacity = int(f.read().strip())
-                except (OSError, ValueError):
-                    pass
-    return ac, capacity
-
-
 def run_diagnose():
     """Run `z13-power diagnose` and return its report text."""
     try:
@@ -310,15 +245,6 @@ def run_diagnose():
         return (r.stdout + r.stderr).strip() or "(no output)"
     except (OSError, subprocess.SubprocessError):
         return "z13-power diagnose failed to run"
-
-
-def z13ctl(args):
-    """Run a z13ctl command; return the CompletedProcess or None."""
-    try:
-        return subprocess.run(["z13ctl", *args], capture_output=True,
-                              text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return None
 
 
 def ryzen_smu_loaded():
@@ -388,11 +314,6 @@ def wait_profile_settle(profile, timeout=0.5):
     return firmware_profile() == profile
 
 
-def z13ctl_ok(args):
-    r = z13ctl(args)
-    return r is not None and r.returncode == 0
-
-
 _last_tdp_args = None
 _last_co = None
 
@@ -430,6 +351,11 @@ def apply_mode(mode_def, force=False):
         if not z13ctl_ok(args):
             return False
         _last_tdp_args = args
+        pl1 = tdp[0]
+        pl2 = tdp[1] if len(tdp) >= 3 else pl1
+        pl3 = tdp[2] if len(tdp) >= 3 else pl1
+        write_wmi_ppt(pl1, pl2, pl3)
+        write_armoury_ppt(pl1, pl2, pl3)
     # Fan curve: only touched if the mode defines one (max omits it — reset
     # is refused above 75W PL1, where --force installs its own safety curve).
     # Skip --reset when the firmware profile was already ours and fans are
@@ -545,89 +471,6 @@ def apply_saved_lighting():
     if lighting["mode"] not in ("static",):
         args += ["--speed", lighting["speed"]]
     z13ctl(args)
-
-
-def load_battery_conf():
-    """Return (saved charge_limit or None, fill_once bool)."""
-    cfg = configparser.ConfigParser()
-    cfg.read(BATTERY_PATH)
-    limit = None
-    fill_once = False
-    if cfg.has_section("battery"):
-        try:
-            limit = int(cfg.get("battery", "charge_limit").strip())
-            if not (40 <= limit <= 100):
-                limit = None
-        except (configparser.Error, ValueError):
-            limit = None
-        try:
-            fill_once = cfg.getboolean("battery", "fill_once")
-        except (configparser.Error, ValueError):
-            fill_once = False
-    return limit, fill_once
-
-
-def save_battery_conf(*, limit=None, fill_once=None):
-    """Update battery.conf keys without wiping the others."""
-    cfg = configparser.ConfigParser()
-    cfg.read(BATTERY_PATH)
-    if not cfg.has_section("battery"):
-        cfg.add_section("battery")
-    if limit is not None:
-        cfg.set("battery", "charge_limit", str(int(limit)))
-    if fill_once is not None:
-        cfg.set("battery", "fill_once", "true" if fill_once else "false")
-    os.makedirs(os.path.dirname(BATTERY_PATH), exist_ok=True)
-    tmp = BATTERY_PATH + ".tmp"
-    with open(tmp, "w") as f:
-        cfg.write(f)
-    os.replace(tmp, BATTERY_PATH)
-
-
-def read_charge_threshold():
-    try:
-        with open(CHARGE_LIMIT_PATH) as f:
-            return int(f.read().strip())
-    except (OSError, ValueError):
-        return None
-
-
-def write_charge_threshold(limit):
-    if limit is None:
-        return False
-    try:
-        limit = int(limit)
-    except (TypeError, ValueError):
-        return False
-    if not (40 <= limit <= 100):
-        return False
-    if read_charge_threshold() == limit:
-        return True
-    try:
-        with open(CHARGE_LIMIT_PATH, "w") as f:
-            f.write(str(limit))
-        return True
-    except OSError:
-        r = z13ctl(["batterylimit", "--set", str(limit)])
-        return r is not None and r.returncode == 0
-
-
-def apply_saved_charge_limit():
-    """Re-apply the charge cap; ACPI does not keep it across reboot.
-
-    A live fill-to-100 one-shot lifts the hardware cap to 100 until the pack
-    is full or the charger is pulled. The saved charge_limit is unchanged.
-    """
-    limit, fill_once = load_battery_conf()
-    if fill_once:
-        ac, capacity = read_power()
-        if ac and (capacity is None or capacity < FILL_DONE_CAPACITY):
-            write_charge_threshold(100)
-            return
-        save_battery_conf(fill_once=False)
-    if limit is None:
-        return
-    write_charge_threshold(limit)
 
 
 _tweaks_mtime = None
@@ -2419,6 +2262,24 @@ class Service:
         if ac:
             write_charge_threshold(100)
 
+    def _reclaim_quiet_tdp(self):
+        """Pin Quiet/Low TDP even when sysfs already shows the cap.
+
+        asusd treats firmware Balanced as its Balanced profile and stuffs
+        52W into the SMU while leaving WMI at 20. Skip-if-same would miss that.
+        """
+        mode = self._last_applied
+        if mode not in ("silent", "lowpower"):
+            return
+        md = (self.cfg.get("modes") or {}).get(mode) or DEFAULT_MODES.get(mode) or {}
+        want = str(md.get("tdp") or "").split()
+        if not want:
+            return
+        pl1 = want[0]
+        pl2 = want[1] if len(want) >= 3 else pl1
+        pl3 = want[2] if len(want) >= 3 else pl1
+        write_wmi_ppt(pl1, pl2, pl3)
+
     def on_poll(self):
         ac, capacity = read_power()
         if ac != self.last_ac:
@@ -2426,6 +2287,7 @@ class Service:
             self.evaluate_power()
             return
         self._tick_fill_once(ac, capacity)
+        self._reclaim_quiet_tdp()
         fw = firmware_profile()
         if not fw or fw == self.last_fw_profile:
             return

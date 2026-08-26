@@ -28,7 +28,7 @@ One command, six modes (`z13-power <mode>`) plus a settings window, and a tray a
 | `max` | performance | 93 forced | reset | manual |
 | `performance` | performance | 75 / 75 / 93 / 93 | reset | **AC** |
 | `balanced` | balanced | 52 / 71 / 70 | reset | **Battery** |
-| `silent` | quiet | 20 / 40 / 40 | -20 mV | **Low battery** |
+| `silent` | quiet | 20 / 20 / 20 | -20 mV | **Low battery** |
 | `lowpower` | quiet | 5 | -25 mV | manual |
 | `status` | — | shows current state | — | manual |
 | `settings` | — | opens the settings window | — | manual |
@@ -42,7 +42,7 @@ One command, six modes (`z13-power <mode>`) plus a settings window, and a tray a
   settings window read `~/.local/state/omarchy/current/theme` and restyle
   themselves; the SNI item re-registers when the bar restarts so the icon
   does not vanish. On Omarchy the tray host can open a panel-style flyout
-  (hero, stats, profile pills) from `contrib/omarchy/Z13PowerPanel.qml`.
+  (hero, stats, profile pills) from `contrib/omarchy/z13.power/Z13PowerPanel.qml`.
 - **Automatic** (default) — applies `on_ac` / `on_battery` / `on_low_battery`
   from config on login and power changes
 - **Manual picks** apply immediately; unless **Lock profile** is checked, they
@@ -59,7 +59,7 @@ One command, six modes (`z13-power <mode>`) plus a settings window, and a tray a
   press again to close. On the desktop that is full settings, stuck
   above a fullscreen game. **Inside nested gamescope** (Steam, Lutris,
   Heroic, `gamescope --`) it is a clickable in-game profile picker
-  (Max / Perf / Mid / Silent / Low) — Hyprland, Plasma Wayland, and
+  (Max / Perf / Mid / Quiet / Low) — Hyprland, Plasma Wayland, and
   X11. Uses z13ctl's `gui-toggle` event. The full settings window is
   never opened on gamescope's Xwayland (that SIGSEGV'd).
 
@@ -204,7 +204,7 @@ APIs, no PowerDevil hooks, no autoswitch. Everything runs on any desktop:
   notification daemon (swaync, mako, dunst, …) for the same features.
 
   Omarchy specifically: `install.sh` runs `z13-power-omarchy-setup`, which
-  puts **`z13.power`** in the battery slot (Max / Perf / Mid / Silent / Low,
+  puts **`z13.power`** in the battery slot (Max / Perf / Mid / Quiet / Low,
   Automatic, Lock) and **`z13.battery`** for low-battery warnings. Stock
   `omarchy.power` is disabled, not edited. The SNI bolt goes Passive while
   that widget is on the bar. `omarchy update` does not remove the user
@@ -240,7 +240,7 @@ automatically every ~30s — no service restart needed.
 
 ## Caveats
 
-- **Undervolt is silicon lottery.** Silent (`-20` mV) and Low (`-25` mV) were
+- **Undervolt is silicon lottery.** Quiet (`-20` mV) and Low (`-25` mV) were
   stable on one GZ302. If yours crashes under load, ease off: pull the Tweaks
   slider toward 0, or change `undervolt=` in those modes (`scripts/z13-power`
   / `service.conf`) to something milder or `reset`.
@@ -268,6 +268,7 @@ automatically every ~30s — no service restart needed.
 ├── service/
 │   ├── z13-power-service   # tray icon + power profile watcher (PyQt6)
 │   ├── z13-power-settings  # settings window: RGB, fan curve, battery, Tweaks
+│   ├── z13_power_common.py # shared paths, z13ctl, battery.conf / charge cap
 │   └── z13-power-service.service   # systemd user unit
 ├── contrib/
 │   ├── omarchy/            # z13.power + z13.battery user plugins

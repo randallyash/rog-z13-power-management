@@ -62,7 +62,7 @@ MODE_GLYPHS = {
     "max": "\uf0e7",           # bolt
     "performance": "\U000f04c5",  # nf-md-speedometer
     "balanced": "\U000f04ba",     # nf-md-scale-balance
-    "silent": "\U000f075f",       # nf-md-volume-off
+    "silent": "\U000f0594",       # nf-md-weather-night (quiet, not mute)
     "lowpower": "\U000f0331",     # nf-md-leaf
 }
 

@@ -68,6 +68,7 @@ chmod +x "$BIN_DIR/z13-power-settings"
 cp "$SCRIPT_DIR/service/z13-power-overlay" "$BIN_DIR/z13-power-overlay"
 chmod +x "$BIN_DIR/z13-power-overlay"
 cp "$SCRIPT_DIR/service/z13_power_theme.py" "$BIN_DIR/z13_power_theme.py"
+cp "$SCRIPT_DIR/service/z13_power_common.py" "$BIN_DIR/z13_power_common.py"
 OK "Installed z13-power + z13-power-service + z13-power-settings + z13-power-overlay to $BIN_DIR"
 
 if ! python3 -c "import PyQt6, pyudev" >/dev/null 2>&1; then
@@ -103,6 +104,20 @@ if [[ ! -f /etc/udev/rules.d/99-z13ctl.rules ]]; then
   sudo z13ctl setup || WARN "z13ctl setup failed — you can re-run it later with: sudo z13ctl setup"
 else
   OK "z13ctl udev rules already present"
+fi
+
+# Armoury firmware-attributes PPT — the APU obeys these, not only WMI ppt_*.
+ARMOURY_PPT_RULE="$SCRIPT_DIR/contrib/udev/99-z13-power-armoury-ppt.rules"
+if [[ -f "$ARMOURY_PPT_RULE" ]]; then
+  sudo cp "$ARMOURY_PPT_RULE" /etc/udev/rules.d/99-z13-power-armoury-ppt.rules
+  sudo udevadm control --reload-rules || true
+  for a in ppt_pl1_spl ppt_pl2_sppt ppt_pl3_fppt; do
+    f="/sys/class/firmware-attributes/asus-armoury/attributes/$a/current_value"
+    [[ -e "$f" ]] || continue
+    sudo chgrp users "$f" 2>/dev/null || true
+    sudo chmod g+w "$f" 2>/dev/null || true
+  done
+  OK "Armoury PPT sysfs writable for users (Quiet/TDP actually take effect)"
 fi
 
 # ── 2b. ryzen_smu: headers for THIS kernel + DKMS module ──────────────────────

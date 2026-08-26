@@ -22,6 +22,8 @@ Panel {
   property bool z13Present: false
   property string z13Tdp: "—"
   property string z13Draw: ""
+  property string z13Temp: "—"
+  property string z13ChargeLimit: ""
   property string z13ModeGlyph: ""
   readonly property string z13TdpLabel: {
     if (root.z13Draw !== "") {
@@ -130,8 +132,10 @@ Panel {
   // Whichever list is "active" given the current power state.
   readonly property var activePhrases: {
     if (fullyCharged) return []
-    if (charging) return chargingPhrases
     if (discharging) return onBatteryPhrases
+    // Plugged in, including holding at the charge cap — don't fall through
+    // to modeLabel()'s "Threshold".
+    if (!UPower.onBattery) return chargingPhrases
     return []
   }
   readonly property bool rotatingPhrases: activePhrases.length > 0
@@ -204,6 +208,8 @@ Panel {
       }
 
       refresh()
+      z13Detect.reload()
+      batteryConf.reload()
       var idx = profiles.indexOf(activeProfile)
       profileIndex = idx >= 0 ? idx : 0
       cursorActive = false
@@ -251,27 +257,50 @@ Panel {
         root.z13Present = !!(s && s.mode)
         root.z13Tdp = (s && s.tdp !== undefined && s.tdp !== null && s.tdp !== "")
           ? String(s.tdp) + "W" : "—"
+        root.z13ChargeLimit = (s && s.charge_limit !== undefined && s.charge_limit !== null && s.charge_limit !== "")
+          ? String(s.charge_limit) + "%" : ""
         root.z13ModeGlyph = Model.modeGlyph(s && s.mode)
       } catch (e) {
         root.z13Present = false
         root.z13Tdp = "—"
+        root.z13ChargeLimit = ""
         root.z13ModeGlyph = ""
       }
     }
   }
 
-  Component.onCompleted: z13Detect.reload()
+  FileView {
+    id: batteryConf
+    path: Quickshell.env("HOME") + "/.config/z13-power/battery.conf"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      var m = String(text() || "").match(/charge_limit\s*=\s*(\d+)/)
+      if (m)
+        root.z13ChargeLimit = m[1] + "%"
+    }
+  }
+
+  Component.onCompleted: {
+    z13Detect.reload()
+    batteryConf.reload()
+  }
 
   Process {
     id: drawProc
     command: ["bash", "-c",
-      'for d in /sys/class/hwmon/hwmon*; do read n < "$d/name" || continue; [ "$n" = amdgpu ] || continue; cat "$d/power1_average" 2>/dev/null || cat "$d/power1_input"; break; done']
+      'for d in /sys/class/hwmon/hwmon*; do read n < "$d/name" || continue; [ "$n" = amdgpu ] || continue; w=$(cat "$d/power1_average" 2>/dev/null || cat "$d/power1_input"); t=$(cat "$d/temp1_input" 2>/dev/null); echo "$w $t"; break; done']
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var n = parseInt(text, 10)
-        if (!isFinite(n) || n <= 0) return
-        root.z13Draw = String(Math.round(n / 1000000))
+        var parts = String(text).trim().split(/\s+/)
+        var n = parseInt(parts[0], 10)
+        var t = parseInt(parts[1], 10)
+        if (isFinite(n) && n > 0)
+          root.z13Draw = String(Math.round(n / 1000000))
+        if (isFinite(t) && t > 0)
+          root.z13Temp = Math.round(t / 1000) + "°C"
       }
     }
   }
@@ -488,7 +517,7 @@ Panel {
           Column {
             width: (parent.width - parent.spacing) / 2
             spacing: Style.spacing.labelGap
-            InfoPair { label: "Battery size"; value: root.batteryInfo.size || "" }
+            InfoPair { label: "Temp"; value: root.z13Temp }
             InfoPair { label: "TDP"; value: root.z13TdpLabel }
           }
 
@@ -497,7 +526,9 @@ Panel {
             spacing: Style.spacing.labelGap
             InfoPair {
               label: root.chargeThresholdActive ? "Charge limit" : (root.discharging ? "Time left" : "Time to full")
-              value: root.chargeThresholdActive ? (root.batteryInfo.threshold || "-") : (root.batteryFlowIdle ? "-" : (root.batteryInfo.time || "—"))
+              value: root.chargeThresholdActive
+                ? (root.z13ChargeLimit !== "" ? root.z13ChargeLimit : "—")
+                : (root.batteryFlowIdle ? "-" : (root.batteryInfo.time || "—"))
             }
             InfoPair {
               label: root.chargeThresholdActive ? "Battery state" : (root.discharging ? "Discharging" : "Charging")
