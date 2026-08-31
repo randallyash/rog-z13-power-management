@@ -99,57 +99,48 @@ only supports AC/battery.
 - KDE Plasma is not required — the tray service is plain Qt and works on any
   desktop. See [Desktop environments](#desktop-environments) below.
 - `ryzen_smu-dkms-git` (amkillam fork) — **required for the Tweaks undervolt
-  slider**. Paru installs it as a dependency of `z13-power-git`. It is a
-  DKMS kernel module (not baked into this repo): it must rebuild against
-  your running kernel, so install the matching `-headers` package
-  (e.g. `linux-cachyos-bore-headers`). Without it, the slider still saves
-  and reapplies once the module is loaded.
+  slider**. It is a DKMS kernel module (not baked into this repo): it must
+  rebuild against your running kernel, so install the matching `-headers`
+  package (e.g. `linux-cachyos-bore-headers`). The Arch package lists it as
+  optional; without it, the slider still saves and reapplies once the
+  module is loaded.
 - AUR conflicts: if you already run a `z13ctl` variant (e.g. `z13ctl-plus-bin`),
   pacman will offer to swap it for `z13ctl-bin` — that's expected and safe.
   `z13gui-bin` is no longer needed: remove it with `paru -Rns z13gui-bin`.
 
 ## Install
 
-**Recommended — packaged (scripts land in `/usr/bin`):**
+Clone this repo from GitHub, then either build the Arch package (system-wide,
+scripts in `/usr/bin`) or run the from-source installer (user-local,
+`~/.local/bin`).
 
-First add Fifthdread's package repo to paru — one command (adds + syncs):
-
-```bash
-curl -fsSL https://5d.fyi/addrepo | bash
-```
-
-Prefer not to run a script? Add the repo by hand, then sync:
-
-```bash
-mkdir -p ~/.config/paru && printf '[fifthdread]\nUrl = https://forgejo.fifthdread.com/Fifthdread/pkgbuilds.git\nSkipReview\n' >> ~/.config/paru/paru.conf
-paru -Sy --pkgbuilds
-```
-
-**The sync step is required** — without it `paru -S` won't know about
-`z13-power-git`. Then install:
-
-```bash
-paru -S z13-power-git
-```
-
-Dependencies are pulled automatically by paru (`z13ctl-bin`, `python-pyqt6`,
-`python-pyudev`, `libnotify`), and the install hook **enables + starts the tray
-service** for you — no extra commands. Installed as root (no paru)? It
-auto-starts at your next login via a user preset.
-
-**Or from source:**
+`z13ctl-bin` is an AUR package and is required either way. Pacman will pull
+the Python deps for the Arch package; `install.sh` expects you to have them
+already.
 
 ```bash
 git clone https://github.com/randallyash/rog-z13-power-management.git
 cd rog-z13-power-management
-./install.sh
+paru -S z13ctl-bin
 ```
 
-To build the Arch package from this tree (clones `main` from GitHub):
+**Arch package (recommended):**
 
 ```bash
 cd packaging/arch/z13-power-git
 makepkg -si
+```
+
+`makepkg` installs `python-pyqt6`, `python-pyudev`, `libnotify`, and
+`python-dbus-next`. The install hook **enables and starts the tray service**.
+Installed as root (no user session)? It auto-starts at your next login via a
+user preset.
+
+**From source:**
+
+```bash
+paru -S python-pyqt6 python-pyudev libnotify python-dbus-next
+./install.sh
 ```
 
 Either path:
@@ -180,6 +171,9 @@ That installs the matching `-headers` package plus `ryzen_smu-dkms-git`
 (amkillam, rebuilds via DKMS — nothing prebuilt in this repo).
 
 A tray icon should appear — click it to switch profiles manually.
+
+To update later: `git pull`, then either `makepkg -si` again from
+`packaging/arch/z13-power-git` or re-run `./install.sh`.
 
 ## Desktop environments
 

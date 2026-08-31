@@ -1,15 +1,14 @@
 # Arch package (`z13-power-git`)
 
-Build from this checkout after cloning the GitHub repo:
+From a clone of this GitHub repo:
 
 ```bash
+paru -S z13ctl-bin
 cd packaging/arch/z13-power-git
 makepkg -si
 ```
 
-`makepkg` clones `main` from GitHub, so the GitHub remote must already exist.
-Dependencies (`z13ctl-bin`, PyQt6, pyudev, libnotify, python-dbus-next) are
-pulled by pacman. The install hook enables and starts the tray service.
-
-The PKGBUILD is the same layout as Fifthdread's `pkgbuilds` repo, with the
-source URL pointed at this GitHub copy.
+`makepkg` clones `main` from GitHub, then installs. Pacman pulls
+`python-pyqt6`, `python-pyudev`, `libnotify`, and `python-dbus-next`.
+`z13ctl-bin` is AUR, so install it first (or have an AUR helper resolve it).
+The install hook enables and starts the tray service.
