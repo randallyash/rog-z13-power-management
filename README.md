@@ -140,9 +140,16 @@ auto-starts at your next login via a user preset.
 **Or from source:**
 
 ```bash
-git clone ssh://git@forgejo.fifthdread.com:223/Fifthdread/rog-z13-power-management.git
+git clone https://github.com/randallyash/rog-z13-power-management.git
 cd rog-z13-power-management
 ./install.sh
+```
+
+To build the Arch package from this tree (clones `main` from GitHub):
+
+```bash
+cd packaging/arch/z13-power-git
+makepkg -si
 ```
 
 Either path:
@@ -276,8 +283,9 @@ automatically every ~30s — no service restart needed.
 │   └── z13-power-config    # packaged helper: deploys KDE Plasma display settings
 ├── kde/
 │   └── powerdevilrc        # display/DPMS-only PowerDevil template (KDE only)
+├── packaging/arch/         # z13-power-git PKGBUILD for GitHub / makepkg
 ├── LICENSE                 # GPL-3.0-or-later
-└── CONTEXT.md              # agent knowledge (local, not for the Forgejo page)
+└── CONTEXT.md              # agent knowledge (local, not for the repo page)
 ```
 
 ## Credits

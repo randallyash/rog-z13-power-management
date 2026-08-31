@@ -1,0 +1,98 @@
+# install hooks for z13-power-git.
+# Runs as root (pacman/paru via sudo). SUDO_USER names the desktop user; every
+# "systemctl --user" call re-enters that user's session through sudo -u so the
+# tray service is enabled/started/stopped in the right user manager.
+
+post_install() {
+  deploy_armoury_ppt
+  enable_service
+  guidance
+}
+
+post_upgrade() {
+  # daemon-reload first so the manager re-reads a changed unit file; then
+  # restart to actually deploy the new service code (`enable --now` won't
+  # touch an already-running unit).
+  deploy_armoury_ppt
+  user_cmd systemctl --user daemon-reload
+  restart_service
+  enable_service
+  guidance
+}
+
+post_remove() {
+  stop_service
+}
+
+enable_service() {
+  if user_cmd systemctl --user enable --now z13-power-service.service; then
+    echo ":: z13-power-service enabled + started for ${SUDO_USER:-<user>}"
+  else
+    echo ":: could not auto-start z13-power-service"
+    echo "   run: systemctl --user enable --now z13-power-service"
+  fi
+}
+
+restart_service() {
+  user_cmd systemctl --user restart z13-power-service.service
+}
+
+# Armoury firmware-attributes PPT — the APU obeys these, not only WMI ppt_*.
+# Runs as root (install hooks do), so no sudo. Fresh udev rules are loaded and
+# the perms are fixed on the already-present device, because the shipped rule
+# only fires on ACTION=="add". Without this, Quiet/20W-lock is a silent no-op.
+deploy_armoury_ppt() {
+  udevadm control --reload-rules >/dev/null 2>&1 || true
+  for a in ppt_pl1_spl ppt_pl2_sppt ppt_pl3_fppt; do
+    f="/sys/class/firmware-attributes/asus-armoury/attributes/$a/current_value"
+    [ -e "$f" ] || continue
+    chgrp users "$f" >/dev/null 2>&1 || true
+    chmod g+w "$f" >/dev/null 2>&1 || true
+  done
+}
+
+stop_service() {
+  # Stop the service and drop its enable symlinks in the user manager.
+  if ! user_cmd systemctl --user stop z13-power-service.service; then
+    echo ":: warning: could not stop z13-power-service via the user manager" >&2
+  fi
+  user_cmd systemctl --user disable z13-power-service.service
+  user_cmd systemctl --user daemon-reload
+  # Root fallback: purge any enable symlinks directly, so the unit can't start
+  # at the next login even if the user bus was unreachable above.
+  find /home/*/.config/systemd/user -name 'z13-power-service.service' \
+       -type l -delete 2>/dev/null || true
+  # Last resort: SIGTERM a still-running service process.
+  if [ -n "${SUDO_USER:-}" ]; then
+    pkill -u "$SUDO_USER" -f '/usr/bin/z13-power-service' 2>/dev/null || true
+  fi
+}
+
+# Run a systemctl --user command in the invoking user's manager. Install
+# hooks run as root, so re-enter the user context (paru/pacman via sudo sets
+# SUDO_USER). Returns non-zero if the user context is unavailable or the
+# command fails; callers decide whether to warn.
+user_cmd() {
+  if [ -z "${SUDO_USER:-}" ]; then
+    echo ":: warning: SUDO_USER unset — skipped: $*" >&2
+    return 1
+  fi
+  uid="$(id -u "$SUDO_USER" 2>/dev/null)" || return 1
+  sudo -u "$SUDO_USER" \
+      XDG_RUNTIME_DIR="/run/user/$uid" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+      "$@" >/dev/null 2>&1
+}
+
+guidance() {
+  cat <<'EOF'
+
+== z13-power — next steps ==
+  Verify setup:     z13-power diagnose
+  Device access:    sudo z13ctl setup        (udev rules + sysfs permissions)
+  Group access:     sudo usermod -aG users "$USER"   (then log out/in)
+  Settings window:  z13-power settings   (RGB lighting, fan curve, battery, power)
+  Deps:             installed automatically by paru (z13ctl-bin, PyQt6, pyudev, libnotify)
+  Quiet 20W lock:   armoury PPT udev rule shipped + applied by this install
+EOF
+}

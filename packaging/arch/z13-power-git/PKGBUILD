@@ -1,0 +1,72 @@
+# Maintainer: Randall Yash <me@randallyash.com>
+pkgname=z13-power-git
+pkgver=52.515952a
+pkgrel=1
+pkgdesc="ROG Flow Z13 (GZ302) control — z13-power presets + tray service (power profile watcher/switcher) + settings window (RGB lighting, fan curve, battery, power; replaces z13gui)"
+arch=('any')
+url="https://github.com/randallyash/rog-z13-power-management"
+license=('GPL-3.0-or-later')
+depends=('z13ctl-bin' 'python-pyqt6' 'python-pyudev' 'libnotify' 'python-dbus-next')
+optdepends=('ryzen_smu-dkms-git: CPU Curve Optimizer undervolt support')
+makedepends=('git')
+install=z13-power-git.install
+source=("z13-power::git+https://github.com/randallyash/rog-z13-power-management.git#branch=main")
+sha256sums=('SKIP')
+
+pkgver() {
+  if [ -d "$srcdir/z13-power/.git" ]; then
+    cd "$srcdir/z13-power"
+    printf "%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+  else
+    printf "0.0"
+  fi
+}
+
+package() {
+  cd "$srcdir/z13-power"
+
+  install -d "$pkgdir/usr/share/z13-power-management" "$pkgdir/usr/bin"
+
+  # z13-power CLI
+  install -m755 scripts/z13-power "$pkgdir/usr/share/z13-power-management/z13-power"
+  ln -s /usr/share/z13-power-management/z13-power "$pkgdir/usr/bin/z13-power"
+
+  # z13-power-service (tray + power profile watcher) + systemd user unit
+  install -m755 service/z13-power-service "$pkgdir/usr/share/z13-power-management/z13-power-service"
+  ln -s /usr/share/z13-power-management/z13-power-service "$pkgdir/usr/bin/z13-power-service"
+  install -Dm644 service/z13-power-service.service "$pkgdir/usr/lib/systemd/user/z13-power-service.service"
+  install -Dm644 "$startdir/50-z13-power.preset" "$pkgdir/usr/lib/systemd/user-preset/50-z13-power.preset"
+  # z13-power-settings (settings window: RGB, fan curve, battery, power)
+  install -m755 service/z13-power-settings "$pkgdir/usr/share/z13-power-management/z13-power-settings"
+  ln -s /usr/share/z13-power-management/z13-power-settings "$pkgdir/usr/bin/z13-power-settings"
+  # z13-power-overlay (slim profile picker for nested gamescope)
+  install -m755 service/z13-power-overlay "$pkgdir/usr/share/z13-power-management/z13-power-overlay"
+  ln -s /usr/share/z13-power-management/z13-power-overlay "$pkgdir/usr/bin/z13-power-overlay"
+  # omarchy theme tokens (service + settings load via _theme_mod())
+  install -m644 service/z13_power_theme.py "$pkgdir/usr/share/z13-power-management/z13_power_theme.py"
+  # shared paths/z13ctl/battery helpers (service + settings load via _add_share_path())
+  install -m644 service/z13_power_common.py "$pkgdir/usr/share/z13-power-management/z13_power_common.py"
+  # config deploy helper + display-only powerdevilrc template
+  install -m755 contrib/z13-power-config "$pkgdir/usr/share/z13-power-management/z13-power-config"
+  ln -s /usr/share/z13-power-management/z13-power-config "$pkgdir/usr/bin/z13-power-config"
+  install -m644 kde/powerdevilrc "$pkgdir/usr/share/z13-power-management/powerdevilrc"
+  # Omarchy z13.power (battery-slot flyout) + z13.battery (low-batt warning);
+  # z13-power-omarchy-setup finds the plugins under share/omarchy
+  install -m755 scripts/z13-power-omarchy-setup "$pkgdir/usr/share/z13-power-management/z13-power-omarchy-setup"
+  ln -s /usr/share/z13-power-management/z13-power-omarchy-setup "$pkgdir/usr/bin/z13-power-omarchy-setup"
+  install -d "$pkgdir/usr/share/z13-power-management/omarchy"
+  cp -r contrib/omarchy/z13.power contrib/omarchy/z13.battery "$pkgdir/usr/share/z13-power-management/omarchy/"
+  install -m644 contrib/omarchy/README.md "$pkgdir/usr/share/z13-power-management/omarchy/README.md"
+  # ryzen-smu udev + modules-load files for `z13-power setup-undervolt`
+  # (packaged CLI looks in $src/contrib/ryzen-smu)
+  install -Dm644 contrib/ryzen-smu/99-ryzen-smu.rules \
+    "$pkgdir/usr/share/z13-power-management/contrib/ryzen-smu/99-ryzen-smu.rules"
+  install -Dm644 contrib/ryzen-smu/ryzen_smu.conf \
+    "$pkgdir/usr/share/z13-power-management/contrib/ryzen-smu/ryzen_smu.conf"
+  # armoury firmware-attributes PPT udev rule — without it the Quiet 20W lock
+  # silently no-ops (write_armoury_ppt swallows OSError). Deployed/perm-fixed
+  # at install+upgrade by z13-power-git.install, mirroring install.sh.
+  install -Dm644 contrib/udev/99-z13-power-armoury-ppt.rules \
+    "$pkgdir/usr/lib/udev/rules.d/99-z13-power-armoury-ppt.rules"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/z13-power-git/LICENSE"
+}

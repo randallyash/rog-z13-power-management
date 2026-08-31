@@ -1,0 +1,19 @@
+pkgbase = z13-power-git
+	pkgdesc = ROG Flow Z13 (GZ302) control — z13-power presets + tray service (power profile watcher/switcher) + settings window (RGB lighting, fan curve, battery, power; replaces z13gui)
+	pkgver = 52.515952a
+	pkgrel = 1
+	url = https://github.com/randallyash/rog-z13-power-management
+	install = z13-power-git.install
+	arch = any
+	license = GPL-3.0-or-later
+	makedepends = git
+	depends = z13ctl-bin
+	depends = python-pyqt6
+	depends = python-pyudev
+	depends = libnotify
+	depends = python-dbus-next
+	optdepends = ryzen_smu-dkms-git: CPU Curve Optimizer undervolt support
+	source = z13-power::git+https://github.com/randallyash/rog-z13-power-management.git#branch=main
+	sha256sums = SKIP
+
+pkgname = z13-power-git
