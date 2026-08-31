@@ -4,34 +4,72 @@
 > overlay** · tray follows plug/unplug (bugfix) · Tweaks undervolt · silicon
 > lottery · charge cap that survives reboot · **~99% less idle work**.
 
-Automated power profile switching for the **2025 ASUS ROG Flow Z13 (GZ302)**.
-Plug in → performance mode. Unplug → balanced. Low battery → silent.
-Undervolt and TDP power limits ride along automatically.
+Power, lighting, and thermals for the **2025 ASUS ROG Flow Z13 (GZ302)** —
+one service, no Armory Crate, no Windows. Built on
+[z13ctl](https://github.com/dahui/z13ctl). Replaces the z13gui overlay drawer.
+Works on Omarchy, Hyprland, KDE Plasma, and anything with a system tray.
 
-Built on [z13ctl](https://github.com/dahui/z13ctl). A single **system tray
-service** (`z13-power-service`) owns all profile switching: it applies the right
-profile at login, on power-source changes, and on low battery, gives you a tray
-menu to switch profiles manually, and pops a desktop notification on every
-switch. A **settings window** (`z13-power-settings`) covers the rest of what
-the z13gui
-overlay drawer used to do — RGB lighting, fan curves, battery charge limit,
-panel overdrive, boot sound, live telemetry.
-No KDE "Run Script" hooks, no PowerDevil configuration, no autoswitch config —
-works on any desktop.
+## Features
 
-## What it does
+<table>
+<tr>
+<td width="50%" valign="top">
 
-One command, six modes (`z13-power <mode>`) plus a settings window, and a tray app:
+**Power**
+- Plug in → Performance. Unplug → Balanced. Low battery → Quiet.
+- Five modes with TDP, fan, and undervolt that actually stick. Quiet is a real **20 W** lock.
+- Lock a manual pick across plug/unplug. Low battery still forces Quiet, then restores it.
+- Charge limit 40–100%, re-applied at login. One-shot *charge to 100%* for this plug-in only.
 
-| Mode | Profile | TDP (W) | Undervolt | Used for |
-|------|---------|---------|-----------|----------|
-| `max` | performance | 93 forced | reset | manual |
-| `performance` | performance | 75 / 75 / 93 / 93 | reset | **AC** |
-| `balanced` | balanced | 52 / 71 / 70 | reset | **Battery** |
-| `silent` | quiet | 20 / 20 / 20 | -20 mV | **Low battery** |
-| `lowpower` | quiet | 5 | -25 mV | manual |
-| `status` | — | shows current state | — | manual |
-| `settings` | — | opens the settings window | — | manual |
+</td>
+<td width="50%" valign="top">
+
+**Control**
+- Omarchy: lives in the **battery slot** — live watts, temp, profile pills, Automatic, Lock.
+- Everywhere else: a tinted tray bolt. Left-click cycles; right-click opens the menu.
+- The **Armory Crate** side button opens settings on the desktop.
+- Nested **gamescope** (Steam, Lutris, Heroic) gets an in-game profile picker.
+- CLI: `z13-power max` · `performance` · `balanced` · `silent` · `lowpower`.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+**Tuning**
+- Keyboard and lightbar: effect, colors, speed, brightness — restored at login.
+- 8-point fan curve, or reset to firmware auto.
+- Curve Optimizer undervolt, 0 to −40 mV, with a silicon-lottery suggestion.
+- Panel overdrive, boot sound, live APU temp / fan / TDP.
+
+</td>
+<td width="50%" valign="top">
+
+**Desktop**
+- No KDE Run Script hooks. No PowerDevil profile wars. No `z13ctl autoswitch`.
+- Follows the live Omarchy theme when one is present.
+- **Diagnose** reports hardware, permissions, daemon, and modules — with the fix.
+- Notifications on every switch, including changes from the overlay or the CLI.
+
+</td>
+</tr>
+</table>
+
+## Profiles
+
+| Mode | When | TDP (W) | Undervolt |
+|------|------|---------|-----------|
+| `performance` | **AC** | 75 / 75 / 93 / 93 | reset |
+| `balanced` | **Battery** | 52 / 71 / 70 | reset |
+| `silent` | **Low battery** | 20 / 20 / 20 | −20 mV |
+| `max` | manual | 93 forced | reset |
+| `lowpower` | manual | 5 | −25 mV |
+
+`z13-power status` prints the live state. `z13-power settings` opens the window
+(RGB, fan, battery, Tweaks, telemetry).
+
+<details>
+<summary>Tray, settings, and overlay — in detail</summary>
 
 `z13-power-service` (system tray):
 - **Tray icon + menu** — left-click cycles profiles, right-click opens the
@@ -49,7 +87,7 @@ One command, six modes (`z13-power <mode>`) plus a settings window, and a tray a
   clear on the next plug/unplug and return to Automatic
 - **Lock profile** — a manual pick survives power changes (low battery still
   forces the safety profile, then restores your locked pick)
-- **Notifications** — KDE popup on every switch, and when a profile is changed
+- **Notifications** — popup on every switch, and when a profile is changed
   from outside the service (overlay, terminal, Armory Crate button)
 - **Diagnose…** — runs `z13-power diagnose` (hardware, permissions, daemon,
   modules) and shows the report with fixes; also checked at service startup
@@ -74,7 +112,7 @@ language as the tray flyout — instead of a stock Qt tab dialog:
 - **Battery** — charge limit slider (40–100%). Saved in `battery.conf` and
   re-applied at login (the ACPI cap does not survive reboot).
 - **Tweaks** — panel overdrive, boot sound, and a CPU undervolt slider
-  (Curve Optimizer, 0 to -40 mV). Saved in `tweaks.conf` and re-applied
+  (Curve Optimizer, 0 to −40 mV). Saved in `tweaks.conf` and re-applied
   at login and after every profile switch. A silicon-lottery score
   (50–99) sits next to it with a suggested starting undervolt; best and
   weakest cores use the same scale. Derived from AMD preferred-core
@@ -83,10 +121,12 @@ language as the tray flyout — instead of a stock Qt tab dialog:
   low-battery threshold, written back to `service.conf`; "Open config file…"
   exposes the raw file for per-mode TDP / fan curve / undervolt tuning.
 - **Telemetry** — live APU temperature, fan RPM, profile, TDP, power source.
+
 Opened from the tray menu (**Settings…**) or with `z13-power settings` (the
-Meta+B panel button).
-The low-battery tier is the reason this project exists — z13ctl's own autoswitch
-only supports AC/battery.
+Meta+B panel button). The low-battery tier is the reason this project exists —
+z13ctl's own autoswitch only supports AC/battery.
+
+</details>
 
 ## Requirements
 
