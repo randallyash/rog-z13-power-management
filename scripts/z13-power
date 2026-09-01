@@ -6,7 +6,7 @@
 # in one command, or opens the settings window (z13-power-settings).
 #
 # Usage:  z13-power <mode>
-# Modes:  balanced | performance | max | silent | lowpower | status | settings | diagnose | help
+# Modes:  balanced | performance | max | silent | lowpower | status | settings | diagnose | version | help
 
 set -euo pipefail
 
@@ -386,6 +386,9 @@ case "${1:-}" in
     ;;
   diagnose)
     diagnose
+    ;;
+  version|--version)
+    echo "z13-power 1.1.0"
     ;;
   setup-undervolt)
     setup_undervolt
