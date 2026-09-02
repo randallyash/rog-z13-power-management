@@ -4,10 +4,20 @@
 # Loaded from beside the script or /usr/share/z13-power-management only.
 
 import configparser
+import io
 import os
-import shutil
-import subprocess
 import sys
+
+from z13_power_io import (
+    IoError,
+    Z13CTL_TIMEOUT,
+    bounded_text,
+    run_helper,
+    sys_read,
+    sys_write,
+    write_user_file,
+    read_user_file,
+)
 
 CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
@@ -38,13 +48,9 @@ def theme_mod():
 Z13CTL_BIN = "/usr/bin/z13ctl"
 
 
-def z13ctl(args, timeout=30):
+def z13ctl(args, timeout=Z13CTL_TIMEOUT):
     """Run a z13ctl command; return the CompletedProcess or None."""
-    try:
-        return subprocess.run([Z13CTL_BIN, *args], capture_output=True,
-                              text=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError):
-        return None
+    return run_helper(["z13ctl", *args], timeout=min(max(timeout, 0.1), Z13CTL_TIMEOUT))
 
 
 def z13ctl_ok(args, timeout=30):
@@ -88,19 +94,16 @@ def write_wmi_ppt(pl1, pl2=None, pl3=None):
     ok = True
     for name, val in mapping.items():
         path = os.path.join(WMI_PPT_DIR, name)
-        try:
-            with open(path, "w") as fh:
-                fh.write(str(int(val)))
-        except OSError:
+        if not sys_write(path, str(int(val))):
             ok = False
     return ok
 
 
 def read_wmi_pl1():
+    raw = sys_read(os.path.join(WMI_PPT_DIR, "ppt_pl1_spl"))
     try:
-        with open(os.path.join(WMI_PPT_DIR, "ppt_pl1_spl")) as fh:
-            return int(fh.read().strip())
-    except (OSError, ValueError):
+        return int(raw) if raw is not None else None
+    except ValueError:
         return None
 
 
@@ -128,16 +131,8 @@ def write_armoury_ppt(pl1, pl2=None, pl3=None):
         lo, hi = ARMOURY_PPT[name]
         val = max(lo, min(hi, val))
         path = os.path.join(ARMOURY_PPT_DIR, name, "current_value")
-        try:
-            with open(path, "w") as fh:
-                fh.write(str(val))
-        except OSError:
-            pass
-        if shutil.which("asusctl"):
-            subprocess.run(
-                ["asusctl", "armoury", "set", name, str(val)],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=5)
+        sys_write(path, str(val))
+        run_helper(["asusctl", "armoury", "set", name, str(val)], timeout=5.0)
 
 
 
@@ -175,41 +170,38 @@ def read_power():
     ac = False
     capacity = None
     if _ac_online_path:
-        try:
-            with open(_ac_online_path) as f:
-                ac = f.read().strip() == "1"
-        except OSError:
+        raw = sys_read(_ac_online_path)
+        if raw is None:
             _discover_power_paths()
-            if _ac_online_path:
-                try:
-                    with open(_ac_online_path) as f:
-                        ac = f.read().strip() == "1"
-                except OSError:
-                    pass
+            raw = sys_read(_ac_online_path) if _ac_online_path else None
+        ac = raw == "1"
     if _bat_capacity_path:
-        try:
-            with open(_bat_capacity_path) as f:
-                capacity = int(f.read().strip())
-        except (OSError, ValueError):
+        raw = sys_read(_bat_capacity_path)
+        if raw is None:
             _discover_power_paths()
-            if _bat_capacity_path:
-                try:
-                    with open(_bat_capacity_path) as f:
-                        capacity = int(f.read().strip())
-                except (OSError, ValueError):
-                    pass
+            raw = sys_read(_bat_capacity_path) if _bat_capacity_path else None
+        try:
+            capacity = int(raw) if raw is not None else None
+        except ValueError:
+            capacity = None
     return ac, capacity
 
 
 def load_battery_conf():
     """Return (saved charge_limit or None, fill_once bool)."""
+    text = bounded_text(read_user_file([".config", "z13-power"], "battery.conf"))
+    if text is None:
+        return None, False
     cfg = configparser.ConfigParser()
-    cfg.read(BATTERY_PATH)
+    try:
+        cfg.read_string(text)
+    except (configparser.Error, ValueError):
+        return None, False
     limit = None
     fill_once = False
     if cfg.has_section("battery"):
         try:
-            limit = int(cfg.get("battery", "charge_limit").strip())
+            limit = int(cfg.get("battery", "charge_limit").strip()[:8])
             if not (40 <= limit <= 100):
                 limit = None
         except (configparser.Error, ValueError):
@@ -222,22 +214,24 @@ def load_battery_conf():
 
 
 def save_battery_conf(*, limit=None, fill_once=None):
-    """Update battery.conf keys without wiping the others.
-
-    In-place write so QML FileView keeps its inotify watch (os.replace
-    drops the inode and the flyout tip goes stale).
-    """
+    """Update battery.conf keys without wiping the others."""
+    cur_limit, cur_fill = load_battery_conf()
+    if limit is None:
+        limit = cur_limit
+    if fill_once is None:
+        fill_once = cur_fill
     cfg = configparser.ConfigParser()
-    cfg.read(BATTERY_PATH)
-    if not cfg.has_section("battery"):
-        cfg.add_section("battery")
+    cfg.add_section("battery")
     if limit is not None:
         cfg.set("battery", "charge_limit", str(int(limit)))
-    if fill_once is not None:
-        cfg.set("battery", "fill_once", "true" if fill_once else "false")
-    os.makedirs(os.path.dirname(BATTERY_PATH), exist_ok=True)
-    with open(BATTERY_PATH, "w") as f:
-        cfg.write(f)
+    cfg.set("battery", "fill_once", "true" if fill_once else "false")
+    buf = io.StringIO()
+    cfg.write(buf)
+    body = buf.getvalue().encode("utf-8")
+    try:
+        write_user_file([".config", "z13-power"], "battery.conf", body)
+    except (IoError, OSError):
+        return
 
 
 def load_charge_limit():
@@ -254,10 +248,10 @@ def save_charge_limit(val):
 
 
 def read_charge_threshold():
+    raw = sys_read(CHARGE_LIMIT_PATH)
     try:
-        with open(CHARGE_LIMIT_PATH) as f:
-            return int(f.read().strip())
-    except (OSError, ValueError):
+        return int(raw) if raw is not None else None
+    except ValueError:
         return None
 
 
@@ -272,13 +266,10 @@ def write_charge_threshold(limit):
         return False
     if read_charge_threshold() == limit:
         return True
-    try:
-        with open(CHARGE_LIMIT_PATH, "w") as f:
-            f.write(str(limit))
+    if sys_write(CHARGE_LIMIT_PATH, str(limit)):
         return True
-    except OSError:
-        r = z13ctl(["batterylimit", "--set", str(limit)])
-        return r is not None and r.returncode == 0
+    r = z13ctl(["batterylimit", "--set", str(limit)])
+    return r is not None and r.returncode == 0
 
 
 def apply_saved_charge_limit():

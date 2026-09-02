@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
+
+from z13_power_io import bounded_text, read_user_file, run_helper
 
 from PyQt6.QtCore import (
     QObject, QPoint, QPointF, QRectF, Qt, QFileSystemWatcher, pyqtSignal,
@@ -78,12 +79,14 @@ def _parse_simple(path):
     """Parse the subset of TOML Omarchy ships (flat keys, quoted or bare)."""
     out = {}
     section = ""
-    try:
-        with open(path, encoding="utf-8") as fh:
-            lines = fh.readlines()
-    except OSError:
+    rel = os.path.relpath(path, os.path.expanduser("~"))
+    parts = rel.split(os.sep)
+    if parts[0] == ".." or len(parts) < 2:
         return out
-    for raw in lines:
+    text = bounded_text(read_user_file(parts[:-1], parts[-1]))
+    if text is None:
+        return out
+    for raw in text.splitlines():
         line = _COMMENT.sub("", raw).strip()
         if not line or line.startswith("#"):
             continue
@@ -96,7 +99,9 @@ def _parse_simple(path):
         value = m.group(2) if m.group(2) is not None else (
             m.group(3) if m.group(3) is not None else m.group(4))
         key = f"{section}.{m.group(1)}" if section else m.group(1)
-        out[key] = value
+        if len(out) >= 32:
+            break
+        out[key[:64]] = str(value)[:64]
     return out
 
 
@@ -143,16 +148,12 @@ def detect_font():
     global _font_cache
     if _font_cache:
         return _font_cache
-    try:
-        out = subprocess.check_output(
-            ["fc-match", "monospace", "-f", "%{family}\\n"],
-            text=True, timeout=2)
-        name = out.splitlines()[0].split(",")[0].strip()
+    r = run_helper(["fc-match", "monospace", "-f", "%{family}\\n"], timeout=2.0)
+    if r is not None and r.returncode == 0:
+        name = (r.stdout.splitlines() or [""])[0].split(",")[0].strip()[:64]
         if name:
             _font_cache = name
             return name
-    except (OSError, subprocess.SubprocessError):
-        pass
     _font_cache = "JetBrainsMono Nerd Font"
     return _font_cache
 
@@ -164,13 +165,16 @@ def detect_radius():
         return _radius_cache
     try:
         import json
-        out = subprocess.check_output(
-            ["hyprctl", "-j", "getoption", "decoration:rounding"],
-            text=True, timeout=1)
-        value = int(json.loads(out).get("int", 0))
-        _radius_cache = max(0, value)
+        r = run_helper(["hyprctl", "-j", "getoption", "decoration:rounding"], timeout=1.0)
+        if r is None:
+            raise ValueError("hyprctl missing")
+        data = json.loads(r.stdout)
+        if not isinstance(data, dict):
+            raise ValueError("hyprctl json")
+        value = int(data.get("int", 0))
+        _radius_cache = max(0, min(value, 64))
         return _radius_cache
-    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+    except (ValueError, TypeError, json.JSONDecodeError):
         _radius_cache = 12
         return _radius_cache
 

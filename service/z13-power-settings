@@ -21,10 +21,9 @@
 # Requires: z13ctl, python-pyqt6.
 
 import configparser
-import json
+import io
 import os
 import re
-import subprocess
 import sys
 
 from PyQt6.QtCore import Qt, QTimer, QFileSystemWatcher
@@ -49,6 +48,16 @@ from z13_power_common import (  # noqa: E402
     LIGHTING_PATH, STATUS_PATH, TWEAKS_PATH,
     load_charge_limit, load_fill_once, save_charge_limit,
     theme_mod as _theme_mod, z13ctl,
+)
+from z13_power_io import (  # noqa: E402
+    IoError,
+    bounded_text,
+    parse_json_object,
+    read_user_file,
+    spawn_detached_usr,
+    sys_read,
+    sys_write,
+    write_user_file,
 )
 
 ASUS_WMI = "/sys/devices/platform/asus-nb-wmi"
@@ -94,13 +103,19 @@ NAV = [
 # ── lighting config ──────────────────────────────────────────────────────────
 
 def load_lighting():
-    cfg = configparser.ConfigParser()
-    cfg.read(LIGHTING_PATH)
     out = dict(DEFAULT_LIGHTING)
+    text = bounded_text(read_user_file([".config", "z13-power"], "lighting.conf"))
+    if text is None:
+        return out
+    cfg = configparser.ConfigParser()
+    try:
+        cfg.read_string(text)
+    except (configparser.Error, ValueError):
+        return out
     if cfg.has_section("lighting"):
         for key in out:
             try:
-                value = cfg.get("lighting", key).strip()
+                value = cfg.get("lighting", key).strip()[:64]
                 if value:
                     out[key] = value
             except configparser.Error:
@@ -110,10 +125,13 @@ def load_lighting():
 
 def load_undervolt():
     """User Tweaks CO offset in mV (0 stock, negative undervolt), or None."""
+    text = bounded_text(read_user_file([".config", "z13-power"], "tweaks.conf"))
+    if text is None:
+        return None
     cfg = configparser.ConfigParser()
-    cfg.read(TWEAKS_PATH)
     try:
-        raw = cfg.get("tweaks", "undervolt").strip()
+        cfg.read_string(text)
+        raw = cfg.get("tweaks", "undervolt").strip()[:16]
         if raw in ("reset", "stock", ""):
             return 0
         val = int(raw)
@@ -129,14 +147,14 @@ def save_undervolt(val):
     if load_undervolt() == val:
         return
     cfg = configparser.ConfigParser()
-    if os.path.exists(TWEAKS_PATH):
-        cfg.read(TWEAKS_PATH)
-    if not cfg.has_section("tweaks"):
-        cfg.add_section("tweaks")
+    cfg.add_section("tweaks")
     cfg.set("tweaks", "undervolt", str(val))
-    os.makedirs(os.path.dirname(TWEAKS_PATH), exist_ok=True)
-    with open(TWEAKS_PATH, "w") as f:
-        cfg.write(f)
+    buf = io.StringIO()
+    cfg.write(buf)
+    try:
+        write_user_file([".config", "z13-power"], "tweaks.conf", buf.getvalue().encode("utf-8"))
+    except (IoError, OSError):
+        return
 
 
 def ryzen_smu_loaded():
@@ -168,9 +186,9 @@ def silicon_lottery():
         path = ("/sys/devices/system/cpu/cpu%d/cpufreq/"
                 "amd_pstate_prefcore_ranking" % i)
         try:
-            with open(path) as f:
-                ranks.append(int(f.read().strip()))
-        except (OSError, ValueError):
+            raw = sys_read(path)
+            ranks.append(int(raw))
+        except (TypeError, ValueError):
             continue
     if not ranks:
         _lottery_cache = False
@@ -196,11 +214,18 @@ def silicon_lottery():
 
 
 def save_lighting(lighting):
+    clean = {}
+    for key in DEFAULT_LIGHTING:
+        val = str(lighting.get(key, DEFAULT_LIGHTING[key]))[:64]
+        clean[key] = val
     cfg = configparser.ConfigParser()
-    cfg["lighting"] = lighting
-    os.makedirs(os.path.dirname(LIGHTING_PATH), exist_ok=True)
-    with open(LIGHTING_PATH, "w") as f:
-        cfg.write(f)
+    cfg["lighting"] = clean
+    buf = io.StringIO()
+    cfg.write(buf)
+    try:
+        write_user_file([".config", "z13-power"], "lighting.conf", buf.getvalue().encode("utf-8"))
+    except (IoError, OSError):
+        return
 
 
 def _follows_theme(lighting):
@@ -250,16 +275,29 @@ CONFIG_DEFAULTS = {
 
 def load_service_config():
     """Read the [service] section of service.conf; return {key: value}."""
-    cfg = configparser.ConfigParser()
-    cfg.read(CONFIG_PATH)
     out = dict(CONFIG_DEFAULTS)
+    text = bounded_text(read_user_file([".config", "z13-power"], "service.conf"))
+    if text is None:
+        return out
+    cfg = configparser.ConfigParser()
+    try:
+        cfg.read_string(text)
+    except (configparser.Error, ValueError):
+        return out
     if cfg.has_section("service"):
         for key in out:
             try:
-                value = cfg.get("service", key).strip()
-                if value:
+                value = cfg.get("service", key).strip()[:64]
+                if key in VALID_MODES or key in ("on_ac", "on_battery", "on_low_battery"):
+                    if value in VALID_MODES:
+                        out[key] = value
+                elif key == "low_battery":
+                    n = int(value)
+                    if 5 <= n <= 95:
+                        out[key] = str(n)
+                elif value:
                     out[key] = value
-            except configparser.Error:
+            except (configparser.Error, ValueError):
                 pass
     return out
 
@@ -268,12 +306,30 @@ def save_service_config(updates):
     """Rewrite the given [service] keys in service.conf, preserving every
     comment and the other sections (mode recipes). Creates a minimal file if
     none exists. Returns the path written."""
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH) as f:
-            lines = f.readlines()
-    else:
+    allowed = {}
+    for key, value in updates.items():
+        if key not in CONFIG_DEFAULTS:
+            continue
+        text = str(value)[:64]
+        if key in ("on_ac", "on_battery", "on_low_battery") and text not in VALID_MODES:
+            continue
+        if key == "low_battery":
+            try:
+                n = int(text)
+            except ValueError:
+                continue
+            if not (5 <= n <= 95):
+                continue
+            text = str(n)
+        allowed[key] = text
+    raw = read_user_file([".config", "z13-power"], "service.conf")
+    text = bounded_text(raw)
+    if text is None:
         lines = ["[service]\n"]
+    else:
+        lines = [ln + "\n" for ln in text.splitlines()]
+        if not lines:
+            lines = ["[service]\n"]
     start = next((i for i, ln in enumerate(lines) if ln.strip() == "[service]"),
                  None)
     if start is None:
@@ -281,7 +337,7 @@ def save_service_config(updates):
         start = len(lines) - 1
     end = next((i for i in range(start + 1, len(lines))
                 if lines[i].startswith("[")), len(lines))
-    for key, value in updates.items():
+    for key, value in allowed.items():
         pattern = re.compile(rf"^({re.escape(key)}\s*=\s*).*$")
         for i in range(start + 1, end):
             if pattern.match(lines[i]):
@@ -290,28 +346,19 @@ def save_service_config(updates):
         else:
             lines.insert(end, f"{key} = {value}\n")
             end += 1
-    with open(CONFIG_PATH, "w") as f:
-        f.writelines(lines)
+    body = "".join(lines).encode("utf-8")
+    write_user_file([".config", "z13-power"], "service.conf", body)
     return CONFIG_PATH
 
 
 # ── status / telemetry parsing ───────────────────────────────────────────────
 
 def _read_sysfs(path):
-    try:
-        with open(path) as f:
-            return f.read().strip()
-    except OSError:
-        return None
+    return sys_read(path)
 
 
 def _write_sysfs(path, value):
-    try:
-        with open(path, "w") as f:
-            f.write(str(value))
-        return True
-    except OSError:
-        return False
+    return sys_write(path, str(value))
 
 
 _hwmon = {}
@@ -417,12 +464,25 @@ def tdp_pl1():
     return 0
 
 
+_STATUS_KEYS = {
+    "mode": str,
+    "label": str,
+    "automatic": bool,
+    "locked": bool,
+    "ac": bool,
+    "capacity": (int, float, type(None)),
+    "tdp": (int, float, str, type(None)),
+    "profile": str,
+    "fill_once": bool,
+    "charge_limit": (int, float, type(None)),
+}
+
+
 def read_status_file():
-    try:
-        with open(STATUS_PATH, encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
-        return {}
+    return parse_json_object(
+        read_user_file([".local", "state", "z13-power"], "status.json"),
+        _STATUS_KEYS,
+    )
 
 
 class LiveStrip(QWidget):
@@ -1233,14 +1293,8 @@ class ConfigTab(QWidget):
         self.msg.set_result(True, "Saved — the service reloads config within ~30s.")
 
     def open_config(self):
-        """Open service.conf in $VISUAL/$EDITOR (fallback xdg-open)."""
-        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
-        try:
-            if editor:
-                subprocess.Popen([editor, CONFIG_PATH])
-            else:
-                subprocess.Popen(["xdg-open", CONFIG_PATH])
-        except OSError:
+        """Open service.conf with /usr/bin/xdg-open (detached, constrained)."""
+        if not spawn_detached_usr(("bin", "xdg-open"), [CONFIG_PATH]):
             self.msg.set_result(False, f"Config: {CONFIG_PATH}")
 
 

@@ -387,7 +387,7 @@ case "${1:-}" in
     diagnose
     ;;
   version|--version)
-    echo "z13-power 1.1.1"
+    echo "z13-power 1.1.2"
     ;;
   setup-undervolt)
     setup_undervolt
