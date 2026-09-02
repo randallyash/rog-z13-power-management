@@ -21,10 +21,123 @@
 # Requires: z13ctl, python-pyqt6.
 
 import configparser
+import hashlib
+import importlib.machinery
+import importlib.util
 import io
 import os
 import re
+import stat
 import sys
+
+# Companion digests for this v1.1.4 tree. Loaded from held fds (plugin) or
+# opened+hashed under /usr (CLI) before any of those modules execute.
+_PIN_IO = "518dc7adc478ddd6b260f2d07077ef44d1a20d2ac3d880a8c4dde4353e31493a"
+_PIN_COMMON = "642961682003749d599597373f906f7312f42cec6bf578d1c23845ca356efa09"
+_PIN_THEME = "9152869ab456a0325d6e8bfeacb433b2f352f58ddf1abb18242c7113a6bdc518"
+_KEEP_FDS: list[int] = []
+_UNTRUSTED_WRITE = stat.S_IWGRP | stat.S_IWOTH
+
+
+def _die(msg: str) -> None:
+    sys.stderr.write(msg + "\n")
+    raise SystemExit(1)
+
+
+def _sha256_fd(fd: int) -> str:
+    digest = hashlib.sha256()
+    os.lseek(fd, 0, os.SEEK_SET)
+    while True:
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        digest.update(chunk)
+    os.lseek(fd, 0, os.SEEK_SET)
+    return digest.hexdigest()
+
+
+def _inherited_fd(key: str) -> int | None:
+    raw = os.environ.get(key, "")
+    prefix = "/proc/self/fd/"
+    if not raw.startswith(prefix):
+        return None
+    rest = raw[len(prefix) :]
+    if not rest.isdigit():
+        return None
+    fd = int(rest)
+    try:
+        os.fstat(fd)
+    except OSError:
+        return None
+    return fd
+
+
+def _open_share_py(filename: str) -> int:
+    if filename in ("", ".", "..") or "/" in filename or "\x00" in filename:
+        _die("illegal module name")
+    usr = os.open("/usr", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        st = os.fstat(usr)
+        if st.st_uid != 0 or st.st_mode & _UNTRUSTED_WRITE:
+            _die("/usr not trusted")
+        share = os.open("share", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=usr)
+        try:
+            st = os.fstat(share)
+            if st.st_uid != 0 or st.st_mode & _UNTRUSTED_WRITE:
+                _die("/usr/share not trusted")
+            pkg = os.open(
+                "z13-power-management",
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=share,
+            )
+            try:
+                st = os.fstat(pkg)
+                if st.st_uid != 0 or st.st_mode & _UNTRUSTED_WRITE:
+                    _die("share dir not trusted")
+                fd = os.open(
+                    filename,
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=pkg,
+                )
+                st = os.fstat(fd)
+                if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & _UNTRUSTED_WRITE:
+                    os.close(fd)
+                    _die(f"{filename} not a trusted regular file")
+                return fd
+            finally:
+                os.close(pkg)
+        finally:
+            os.close(share)
+    finally:
+        os.close(usr)
+
+
+def _load_io() -> None:
+    fd = _inherited_fd("Z13_MOD_IO")
+    if fd is None:
+        fd = _open_share_py("z13_power_io.py")
+    if _sha256_fd(fd) != _PIN_IO:
+        _die("z13_power_io.py digest mismatch")
+    origin = f"/proc/self/fd/{fd}"
+    loader = importlib.machinery.SourceFileLoader("z13_power_io", origin)
+    spec = importlib.util.spec_from_loader("z13_power_io", loader)
+    if spec is None or spec.loader is None:
+        _die("cannot load z13_power_io")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["z13_power_io"] = mod
+    spec.loader.exec_module(mod)
+    _KEEP_FDS.append(fd)
+
+
+_load_io()
+import z13_power_io  # noqa: E402
+
+z13_power_io.install_pinned_module(
+    "z13_power_common", _PIN_COMMON, "Z13_MOD_COMMON", "z13_power_common.py"
+)
+z13_power_io.install_pinned_module(
+    "z13_power_theme", _PIN_THEME, "Z13_MOD_THEME", "z13_power_theme.py"
+)
 
 from PyQt6.QtCore import Qt, QTimer, QFileSystemWatcher
 from PyQt6.QtGui import QColor
@@ -33,16 +146,6 @@ from PyQt6.QtWidgets import (QApplication, QColorDialog, QFrame,
                              QSizePolicy, QSlider, QSpinBox, QStackedWidget,
                              QVBoxLayout, QWidget)
 
-def _add_share_path():
-    here = os.path.dirname(os.path.realpath(__file__))
-    for path in (here, "/usr/share/z13-power-management"):
-        if os.path.isfile(os.path.join(path, "z13_power_common.py")):
-            if path not in sys.path:
-                sys.path.insert(0, path)
-            return
-
-
-_add_share_path()
 from z13_power_common import (  # noqa: E402
     CHARGE_LIMIT_PATH as BAT_LIMIT_PATH, CONFIG_PATH,
     LIGHTING_PATH, STATUS_PATH, TWEAKS_PATH,

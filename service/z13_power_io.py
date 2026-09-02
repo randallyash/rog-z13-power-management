@@ -11,6 +11,8 @@ from __future__ import annotations
 import errno
 import fcntl
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 import os
 import pwd
@@ -362,7 +364,9 @@ def _open_same_dir_symlink(dirfd: int, name: str) -> int:
         raise
 
 
-def open_usr_file(rel: tuple[str, ...], *, allow_same_dir_symlink: bool = False) -> int:
+def open_usr_file(
+    rel: tuple[str, ...], *, allow_same_dir_symlink: bool = False, executable: bool = True
+) -> int:
     usr = trusted_usr_fd()
     try:
         *dirs, name = rel
@@ -378,7 +382,7 @@ def open_usr_file(rel: tuple[str, ...], *, allow_same_dir_symlink: bool = False)
                 if not allow_same_dir_symlink or e.errno != errno.ELOOP:
                     raise
                 fd = _open_same_dir_symlink(dirfd, name)
-            _check_reg(os.fstat(fd), owner=0, executable=True)
+            _check_reg(os.fstat(fd), owner=0, executable=executable)
             return fd
         finally:
             if close_dir:
@@ -486,6 +490,60 @@ def _bounded_collect(proc: subprocess.Popen, timeout: float, max_out: int, max_e
                 return bytes(out), bytes(err), rc
 
 
+_PINNED_MODULE_FDS: list[int] = []
+
+
+def inherited_fd(raw: str) -> int | None:
+    prefix = "/proc/self/fd/"
+    if not raw.startswith(prefix):
+        return None
+    rest = raw[len(prefix) :]
+    if not rest.isdigit():
+        return None
+    fd = int(rest)
+    try:
+        os.fstat(fd)
+    except OSError:
+        return None
+    return fd
+
+
+def install_pinned_module(modname: str, digest: str, env_key: str, filename: str) -> None:
+    """Hash a held fd (or open the /usr copy) and exec_module from that same fd."""
+    if modname in sys.modules:
+        return
+    inherited = inherited_fd(os.environ.get(env_key, ""))
+    close_on_fail = False
+    if inherited is not None:
+        fd = inherited
+    else:
+        fd = open_usr_file(
+            ("share", "z13-power-management", filename),
+            executable=False,
+        )
+        close_on_fail = True
+    try:
+        if sha256_fd(fd) != digest:
+            raise IoError(f"{modname} digest mismatch")
+        os.lseek(fd, 0, os.SEEK_SET)
+        origin = f"/proc/self/fd/{fd}"
+        loader = importlib.machinery.SourceFileLoader(modname, origin)
+        spec = importlib.util.spec_from_loader(modname, loader)
+        if spec is None or spec.loader is None:
+            raise IoError(f"cannot load {modname}")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[modname] = mod
+        spec.loader.exec_module(mod)
+        _PINNED_MODULE_FDS.append(fd)
+    except BaseException:
+        if close_on_fail:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise
+
+
 def _held_helper_fd(name: str) -> int | None:
     rel = HELPERS.get(name)
     if rel is None:
@@ -503,6 +561,17 @@ def _held_helper_fd(name: str) -> int | None:
             except OSError:
                 pass
             _held_fds.pop(name, None)
+    if name == "z13ctl":
+        inherited = inherited_fd(os.environ.get("Z13CTL", ""))
+        if inherited is not None:
+            try:
+                _check_reg(os.fstat(inherited), owner=0, executable=True)
+                if sha256_fd(inherited) != Z13CTL_SHA256:
+                    return None
+                _held_fds[name] = inherited
+                return inherited
+            except (IoError, OSError):
+                return None
     try:
         fd = open_usr_file(rel)
     except (Missing, IoError, OSError):

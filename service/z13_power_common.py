@@ -35,13 +35,7 @@ _bat_capacity_path = None
 
 
 def theme_mod():
-    """Load z13_power_theme from beside this file or the share dir."""
-    here = os.path.dirname(os.path.realpath(__file__))
-    for path in (here, "/usr/share/z13-power-management"):
-        if os.path.isfile(os.path.join(path, "z13_power_theme.py")):
-            if path not in sys.path:
-                sys.path.insert(0, path)
-            break
+    """Return the already-pinned z13_power_theme module (loaded from a held fd)."""
     import z13_power_theme
     return z13_power_theme
 
