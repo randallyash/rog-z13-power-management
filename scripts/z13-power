@@ -10,12 +10,14 @@
 
 set -euo pipefail
 
-Z13CTL="$(command -v z13ctl || true)"
+# Never PATH-lookup z13ctl: a ~/.local/bin override would beat the pinned
+# /usr/bin/z13ctl that the Omarchy plugin already hashed.
+Z13CTL="/usr/bin/z13ctl"
 
 die() { echo "z13-power: $*" >&2; exit 1; }
 
 require_z13ctl() {
-  [[ -n "$Z13CTL" ]] || die "z13ctl not found — install z13ctl-bin (AUR)"
+  [[ -x "$Z13CTL" ]] || die "z13ctl not found — install the pinned binary at /usr/bin/z13ctl"
 }
 
 ryzen_smu_loaded() {
@@ -32,12 +34,12 @@ apply_undervolt() {
     echo "z13-power: warning: ryzen_smu module not loaded — skipping undervolt" >&2
     return 0
   fi
-  z13ctl undervolt --set "$value"
+  "$Z13CTL" undervolt --set "$value"
 }
 
 reset_undervolt() {
   ryzen_smu_loaded || return 0
-  z13ctl undervolt --reset
+  "$Z13CTL" undervolt --reset
 }
 
 firmware_profile() {
@@ -62,7 +64,7 @@ set_profile() {
   local want="$1"
   local wait_force="${2:-0}"
   [[ "$(firmware_profile)" == "$want" ]] && return 0
-  z13ctl profile --set "$want"
+  "$Z13CTL" profile --set "$want"
   [[ "$wait_force" == "1" ]] || return 0
   local i matched=0
   for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -167,7 +169,6 @@ setup_undervolt() {
   local rules src
   # Packaged:  $src is /usr/share/z13-power-management → ./contrib/ryzen-smu
   # From-source: $src is scripts/ → ../contrib/ryzen-smu
-  # ~/.local/bin override: still find the packaged copy.
   src="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0")")" && pwd)"
   for rules in \
       "$src/contrib/ryzen-smu/99-ryzen-smu.rules" \
@@ -199,7 +200,7 @@ setup_undervolt() {
       /sys/kernel/ryzen_smu_drv/smn 2>/dev/null || true
   fi
   systemctl --user restart z13ctl.service 2>/dev/null || true
-  if z13ctl undervolt --get >/dev/null 2>&1; then
+  if "$Z13CTL" undervolt --get >/dev/null 2>&1; then
     printf '[ OK ] Curve Optimizer ready — Tweaks undervolt will apply\n'
   else
     printf '[WARN] module loaded but z13ctl undervolt still failed — restart z13ctl: systemctl --user restart z13ctl\n'
@@ -216,10 +217,10 @@ diagnose() {
     printf '[WARN] Hardware: %s is not a ROG Flow Z13 — tuned for the GZ302\n' "${product:-unknown}"
     warns=$((warns+1))
   fi
-  if command -v z13ctl >/dev/null 2>&1; then
-    printf '[ OK ] z13ctl: %s\n' "$(z13ctl --version 2>/dev/null | head -1)"
+  if [[ -x "$Z13CTL" ]]; then
+    printf '[ OK ] z13ctl: %s\n' "$("$Z13CTL" --version 2>/dev/null | head -1)"
   else
-    printf '[FAIL] z13ctl: not installed — run: paru -S z13ctl-bin\n'
+    printf '[FAIL] z13ctl: not installed at /usr/bin/z13ctl\n'
     fails=$((fails+1))
   fi
   if id -nG 2>/dev/null | tr ' ' '\n' | grep -qw users; then
@@ -248,7 +249,7 @@ diagnose() {
     printf '[WARN] daemon: z13ctl.service not running — run: systemctl --user enable --now z13ctl\n'
     warns=$((warns+1))
   fi
-  if z13ctl status >/dev/null 2>&1; then
+  if "$Z13CTL" status >/dev/null 2>&1; then
     printf '[ OK ] z13ctl status: reads hardware\n'
   else
     printf '[FAIL] z13ctl status: cannot read hardware — check group + udev rules\n'
@@ -268,9 +269,9 @@ diagnose() {
     printf '[WARN] notify-send: not found — install libnotify for popups\n'
     warns=$((warns+1))
   fi
-  if command -v z13ctl >/dev/null 2>&1; then
+  if [[ -x "$Z13CTL" ]]; then
     local as
-    as="$(z13ctl autoswitch --get 2>/dev/null || true)"
+    as="$("$Z13CTL" autoswitch --get 2>/dev/null || true)"
     if printf '%s\n' "$as" | grep -qi '^Autoswitch:[[:space:]]*enabled'; then
       printf '[WARN] z13ctl autoswitch: enabled — races this service on plug/unplug\n'
       printf '       disable: z13ctl autoswitch --clear\n'
@@ -310,39 +311,39 @@ case "${1:-}" in
   balanced)
     require_z13ctl
     set_profile balanced
-    z13ctl tdp --set 52 --pl2 71 --pl3 70
-    z13ctl fancurve --reset
+    "$Z13CTL" tdp --set 52 --pl2 71 --pl3 70
+    "$Z13CTL" fancurve --reset
     reset_undervolt
 
     ;;
   performance)
     require_z13ctl
     set_profile performance
-    z13ctl tdp --set 75 --pl1 75 --pl2 93 --pl3 93
-    z13ctl fancurve --reset
+    "$Z13CTL" tdp --set 75 --pl1 75 --pl2 93 --pl3 93
+    "$Z13CTL" fancurve --reset
     reset_undervolt
 
     ;;
   max)
     require_z13ctl
     set_profile performance 1
-    z13ctl tdp --set 93 --force
+    "$Z13CTL" tdp --set 93 --force
     reset_undervolt
 
     ;;
   silent)
     require_z13ctl
     set_profile balanced
-    z13ctl tdp --set 20 --pl2 20 --pl3 20
-    z13ctl fancurve --reset
+    "$Z13CTL" tdp --set 20 --pl2 20 --pl3 20
+    "$Z13CTL" fancurve --reset
     apply_undervolt -20
 
     ;;
   lowpower)
     require_z13ctl
     set_profile quiet
-    z13ctl tdp --set 5
-    z13ctl fancurve --reset
+    "$Z13CTL" tdp --set 5
+    "$Z13CTL" fancurve --reset
     apply_undervolt -25
 
     ;;
@@ -367,28 +368,26 @@ case "${1:-}" in
   status)
     require_z13ctl
     echo "## Z13 Profile:"
-    z13ctl profile --get 2>/dev/null || echo "  (unavailable)"
+    "$Z13CTL" profile --get 2>/dev/null || echo "  (unavailable)"
     echo "## TDP:"
-    z13ctl tdp --get 2>/dev/null || echo "  (unavailable)"
+    "$Z13CTL" tdp --get 2>/dev/null || echo "  (unavailable)"
     echo "## Fan Curve:"
-    z13ctl fancurve --get 2>/dev/null || echo "  (unavailable)"
+    "$Z13CTL" fancurve --get 2>/dev/null || echo "  (unavailable)"
     echo "## CPU Undervolt:"
-    z13ctl undervolt --get 2>/dev/null || echo "  (unavailable)"
+    "$Z13CTL" undervolt --get 2>/dev/null || echo "  (unavailable)"
     ;;
   settings)
-    if [[ -x "$HOME/.local/bin/z13-power-settings" ]]; then
-      exec "$HOME/.local/bin/z13-power-settings"
-    elif command -v z13-power-settings >/dev/null 2>&1; then
-      exec z13-power-settings
+    if [[ -x /usr/share/z13-power-management/z13-power-settings ]]; then
+      exec /usr/share/z13-power-management/z13-power-settings
     else
-      die "z13-power-settings not found — reinstall z13-power (or run: ./install.sh)"
+      die "z13-power-settings not found at /usr/share/z13-power-management/z13-power-settings"
     fi
     ;;
   diagnose)
     diagnose
     ;;
   version|--version)
-    echo "z13-power 1.1.0"
+    echo "z13-power 1.1.1"
     ;;
   setup-undervolt)
     setup_undervolt

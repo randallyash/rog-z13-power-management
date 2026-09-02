@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 #
 # Shared paths and helpers for z13-power-service and z13-power-settings.
-# Loaded from beside the script, /usr/share/z13-power-management, or
-# ~/.local/bin — same lookup as z13_power_theme.py.
+# Loaded from beside the script or /usr/share/z13-power-management only.
 
 import configparser
 import os
@@ -27,8 +26,7 @@ _bat_capacity_path = None
 def theme_mod():
     """Load z13_power_theme from beside this file or the share dir."""
     here = os.path.dirname(os.path.realpath(__file__))
-    for path in (here, "/usr/share/z13-power-management",
-                 os.path.expanduser("~/.local/bin")):
+    for path in (here, "/usr/share/z13-power-management"):
         if os.path.isfile(os.path.join(path, "z13_power_theme.py")):
             if path not in sys.path:
                 sys.path.insert(0, path)
@@ -37,10 +35,13 @@ def theme_mod():
     return z13_power_theme
 
 
+Z13CTL_BIN = "/usr/bin/z13ctl"
+
+
 def z13ctl(args, timeout=30):
     """Run a z13ctl command; return the CompletedProcess or None."""
     try:
-        return subprocess.run(["z13ctl", *args], capture_output=True,
+        return subprocess.run([Z13CTL_BIN, *args], capture_output=True,
                               text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError):
         return None
