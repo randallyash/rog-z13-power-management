@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 #
 # Shared paths and helpers for z13-power-service and z13-power-settings.
 # Loaded from beside the script or /usr/share/z13-power-management only.
@@ -13,6 +13,7 @@ from z13_power_io import (
     Z13CTL_TIMEOUT,
     bounded_text,
     run_helper,
+    sys_listdir,
     sys_read,
     sys_write,
     write_user_file,
@@ -141,22 +142,16 @@ def _discover_power_paths():
     global _ac_online_path, _bat_capacity_path
     _ac_online_path = None
     _bat_capacity_path = None
-    try:
-        names = os.listdir("/sys/class/power_supply")
-    except OSError:
-        return
+    names = sys_listdir(["class", "power_supply"])
     for d in names:
-        base = os.path.join("/sys/class/power_supply", d)
-        if not os.path.isdir(base):
-            continue
         if _ac_online_path is None and (
                 d in ("AC", "ACAD", "AC0") or d.startswith("ADP")):
-            path = os.path.join(base, "online")
-            if os.path.isfile(path):
+            path = f"/sys/class/power_supply/{d}/online"
+            if sys_read(path) is not None:
                 _ac_online_path = path
         elif _bat_capacity_path is None and d.startswith("BAT"):
-            path = os.path.join(base, "capacity")
-            if os.path.isfile(path):
+            path = f"/sys/class/power_supply/{d}/capacity"
+            if sys_read(path) is not None:
                 _bat_capacity_path = path
         if _ac_online_path and _bat_capacity_path:
             return

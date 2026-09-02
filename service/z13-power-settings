@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 #
 # z13-power-settings — settings window for the ASUS ROG Flow Z13 (GZ302).
 #
@@ -55,6 +55,7 @@ from z13_power_io import (  # noqa: E402
     parse_json_object,
     read_user_file,
     spawn_detached_usr,
+    sys_listdir,
     sys_read,
     sys_write,
     write_user_file,
@@ -367,18 +368,14 @@ _hwmon = {}
 def _hwmon_path(name):
     """Resolve /sys/class/hwmon/* by name; cache until the path disappears."""
     cached = _hwmon.get(name)
-    if cached and os.path.isdir(cached):
-        if _read_sysfs(os.path.join(cached, "name")) == name:
-            return cached
+    if cached and _read_sysfs(os.path.join(cached, "name")) == name:
+        return cached
     base = None
-    try:
-        for entry in os.listdir("/sys/class/hwmon"):
-            path = os.path.join("/sys/class/hwmon", entry)
-            if _read_sysfs(os.path.join(path, "name")) == name:
-                base = path
-                break
-    except OSError:
-        pass
+    for entry in sys_listdir(["class", "hwmon"]):
+        path = f"/sys/class/hwmon/{entry}"
+        if _read_sysfs(os.path.join(path, "name")) == name:
+            base = path
+            break
     _hwmon[name] = base
     return base
 

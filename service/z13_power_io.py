@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Descriptor-relative user-state I/O and bounded helpers for z13-power.
 
 Used by z13-power-settings and the modules it imports. Pathnames are not used
@@ -8,7 +8,9 @@ held /usr fd with a sanitized environment.
 """
 from __future__ import annotations
 
+import errno
 import fcntl
+import hashlib
 import json
 import os
 import pwd
@@ -39,6 +41,9 @@ HELPERS = {
     "asusctl": ("bin", "asusctl"),
     "xdg-open": ("bin", "xdg-open"),
 }
+Z13CTL_SHA256 = "3e49f796e6eec2021ce4716f57c19f5f65f43f76408cb56a6454f88147f5f4d6"
+Z13CTL_VERSION = "z13ctl version 1.3.2"
+_held_fds: dict[str, int] = {}
 
 ENV_KEEP = (
     "HOME", "USER", "LOGNAME", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
@@ -342,7 +347,22 @@ def parse_json_object(raw: bytes | None, allowed: dict[str, type | tuple]) -> di
     return out
 
 
-def open_usr_file(rel: tuple[str, ...]) -> int:
+def _open_same_dir_symlink(dirfd: int, name: str) -> int:
+    target = os.readlink(name, dir_fd=dirfd)
+    if target in ("", ".", "..") or "/" in target or "\x00" in target:
+        raise IoError("symlink target not a same-directory name")
+    fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dirfd)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise IoError("symlink target is not a regular file")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def open_usr_file(rel: tuple[str, ...], *, allow_same_dir_symlink: bool = False) -> int:
     usr = trusted_usr_fd()
     try:
         *dirs, name = rel
@@ -352,7 +372,12 @@ def open_usr_file(rel: tuple[str, ...]) -> int:
             dirfd = walk_dirs(usr, list(dirs), owner=0)
             close_dir = True
         try:
-            fd = openat_file(dirfd, name, os.O_RDONLY)
+            try:
+                fd = openat_file(dirfd, name, os.O_RDONLY)
+            except OSError as e:
+                if not allow_same_dir_symlink or e.errno != errno.ELOOP:
+                    raise
+                fd = _open_same_dir_symlink(dirfd, name)
             _check_reg(os.fstat(fd), owner=0, executable=True)
             return fd
         finally:
@@ -360,6 +385,22 @@ def open_usr_file(rel: tuple[str, ...]) -> int:
                 os.close(dirfd)
     finally:
         os.close(usr)
+
+
+def sha256_fd(fd: int) -> str:
+    digest = hashlib.sha256()
+    os.lseek(fd, 0, os.SEEK_SET)
+    total = 0
+    while True:
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > 16 * 1024 * 1024:
+            raise IoError("binary too large")
+        digest.update(chunk)
+    os.lseek(fd, 0, os.SEEK_SET)
+    return digest.hexdigest()
 
 
 def _clear_cloexec(fd: int) -> None:
@@ -445,39 +486,84 @@ def _bounded_collect(proc: subprocess.Popen, timeout: float, max_out: int, max_e
                 return bytes(out), bytes(err), rc
 
 
-def run_helper(argv: list[str], *, timeout: float = DEFAULT_TIMEOUT) -> SimpleNamespace | None:
-    if not argv:
-        return None
-    name = os.path.basename(argv[0])
+def _held_helper_fd(name: str) -> int | None:
     rel = HELPERS.get(name)
     if rel is None:
         return None
-    extra = argv[1:]
+    fd = _held_fds.get(name)
+    if fd is not None:
+        try:
+            _check_reg(os.fstat(fd), owner=0, executable=True)
+            if name == "z13ctl" and sha256_fd(fd) != Z13CTL_SHA256:
+                raise IoError("z13ctl digest changed on held fd")
+            return fd
+        except (IoError, OSError):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            _held_fds.pop(name, None)
     try:
         fd = open_usr_file(rel)
     except (Missing, IoError, OSError):
         return None
     try:
-        _clear_cloexec(fd)
-        proc_path = f"/proc/self/fd/{fd}"
-        proc = subprocess.Popen(
-            [proc_path, *extra],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=trusted_env(),
-            start_new_session=True,
-            close_fds=True,
-            pass_fds=(fd,),
-        )
-        try:
-            out, err, rc = _bounded_collect(proc, timeout, MAX_PROC_BYTES, MAX_ERR_BYTES)
-        except IoError:
-            return None
-        finally:
-            if proc.poll() is None:
-                _kill_group(proc)
-    finally:
+        _check_reg(os.fstat(fd), owner=0, executable=True)
+        if name == "z13ctl":
+            if sha256_fd(fd) != Z13CTL_SHA256:
+                raise IoError("z13ctl digest mismatch")
+            _clear_cloexec(fd)
+            proc = subprocess.Popen(
+                [f"/proc/self/fd/{fd}", "--version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=trusted_env(),
+                start_new_session=True,
+                close_fds=True,
+                pass_fds=(fd,),
+            )
+            try:
+                out, _err, rc = _bounded_collect(proc, 2.0, 256, 256)
+            except IoError:
+                os.close(fd)
+                return None
+            identity = out.decode("utf-8", "replace").strip()
+            if rc not in (0, None) or identity != Z13CTL_VERSION:
+                os.close(fd)
+                return None
+        _held_fds[name] = fd
+        return fd
+    except (IoError, OSError):
         os.close(fd)
+        return None
+
+
+def run_helper(argv: list[str], *, timeout: float = DEFAULT_TIMEOUT) -> SimpleNamespace | None:
+    if not argv:
+        return None
+    name = os.path.basename(argv[0])
+    extra = argv[1:]
+    fd = _held_helper_fd(name)
+    if fd is None:
+        return None
+    _clear_cloexec(fd)
+    proc_path = f"/proc/self/fd/{fd}"
+    proc = subprocess.Popen(
+        [proc_path, *extra],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=trusted_env(),
+        start_new_session=True,
+        close_fds=True,
+        pass_fds=(fd,),
+    )
+    try:
+        out, err, rc = _bounded_collect(proc, timeout, MAX_PROC_BYTES, MAX_ERR_BYTES)
+    except IoError:
+        return None
+    finally:
+        if proc.poll() is None:
+            _kill_group(proc)
     return SimpleNamespace(
         stdout=out.decode("utf-8", "replace")[:MAX_PROC_BYTES],
         stderr=err.decode("utf-8", "replace")[:MAX_ERR_BYTES],
@@ -486,7 +572,7 @@ def run_helper(argv: list[str], *, timeout: float = DEFAULT_TIMEOUT) -> SimpleNa
 
 
 def spawn_detached_usr(rel: tuple[str, ...], extra_argv: list[str]) -> bool:
-    """Launch a /usr helper and return immediately (intentionally detached GUI)."""
+    """Double-fork a /usr helper so the long-lived parent can reap immediately."""
     try:
         fd = open_usr_file(rel)
     except (Missing, IoError, OSError):
@@ -499,6 +585,9 @@ def spawn_detached_usr(rel: tuple[str, ...], extra_argv: list[str]) -> bool:
         if pid == 0:
             try:
                 os.setsid()
+                pid2 = os.fork()
+                if pid2 > 0:
+                    os._exit(0)
                 devnull = os.open("/dev/null", os.O_RDWR | os.O_CLOEXEC)
                 os.dup2(devnull, 0)
                 os.dup2(devnull, 1)
@@ -506,9 +595,55 @@ def spawn_detached_usr(rel: tuple[str, ...], extra_argv: list[str]) -> bool:
                 os.execve(proc_path, [proc_path, *extra_argv], child_env)
             except Exception:
                 os._exit(127)
+        os.waitpid(pid, 0)
         return True
     finally:
         os.close(fd)
+
+
+def sys_listdir(parts: list[str]) -> list[str]:
+    sysfd = trusted_sys_fd()
+    sys_dev = os.fstat(sysfd).st_dev
+    cur = sysfd
+    try:
+        for part in parts:
+            try:
+                nxt = os.open(
+                    part,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=cur,
+                )
+            except OSError:
+                nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=cur)
+            if os.fstat(nxt).st_dev != sys_dev:
+                os.close(nxt)
+                return []
+            if cur is not sysfd:
+                os.close(cur)
+            cur = nxt
+        try:
+            names = os.listdir(cur)
+        except OSError:
+            return []
+        return [n for n in names[:64] if n not in (".", "..") and "/" not in n and "\x00" not in n]
+    except (Missing, IoError, OSError):
+        return []
+    finally:
+        if cur is not sysfd:
+            try:
+                os.close(cur)
+            except OSError:
+                pass
+        os.close(sysfd)
+
+
+def user_dir_exists(parts: list[str]) -> bool:
+    try:
+        fd = _home_sub_dirfd(parts, create=False)
+    except (Missing, IoError, OSError):
+        return False
+    os.close(fd)
+    return True
 
 
 def sys_read(path: str, max_bytes: int = MAX_SYS_BYTES) -> str | None:

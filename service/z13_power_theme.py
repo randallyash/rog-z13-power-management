@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Omarchy theme tokens for z13-power Qt surfaces.
 
 Reads the live theme from ~/.local/state/omarchy/current/ (colors.toml,
@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import re
 
-from z13_power_io import bounded_text, read_user_file, run_helper
+from z13_power_io import bounded_text, read_user_file, run_helper, user_dir_exists
 
 from PyQt6.QtCore import (
     QObject, QPoint, QPointF, QRectF, Qt, QFileSystemWatcher, pyqtSignal,
@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
 
 def is_omarchy():
     """True when this user has an Omarchy config — not KDE/Cachy-without-it."""
-    return os.path.isdir(os.path.expanduser("~/.config/omarchy"))
+    return user_dir_exists([".config", "omarchy"])
 
 
 CURRENT_DIR = os.path.expanduser("~/.local/state/omarchy/current")
