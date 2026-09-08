@@ -54,7 +54,8 @@ def _add_share_path():
     here = os.path.dirname(os.path.realpath(__file__))
     for path in (here, "/usr/share/z13-power-management",
                  os.path.expanduser("~/.local/bin")):
-        if os.path.isfile(os.path.join(path, "z13_power_common.py")):
+        if (os.path.isfile(os.path.join(path, "z13_power_common.py"))
+                and os.path.isfile(os.path.join(path, "z13_power_io.py"))):
             if path not in sys.path:
                 sys.path.insert(0, path)
             return

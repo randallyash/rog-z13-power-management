@@ -6,7 +6,7 @@
 # in one command, or opens the settings window (z13-power-settings).
 #
 # Usage:  z13-power <mode>
-# Modes:  balanced | performance | max | silent | lowpower | status | settings | diagnose | help
+# Modes:  balanced | performance | max | silent | lowpower | status | settings | diagnose | version | help
 
 set -euo pipefail
 
@@ -98,6 +98,7 @@ modes:
   settings     open the settings window (lighting, fan curve, battery, power)
   diagnose     check z13 setup (hardware, perms, daemon, modules) and show fixes
   setup-undervolt  install kernel headers for THIS kernel + ryzen_smu (DKMS)
+  version      print z13-power 1.1.0
   help         show this message
 EOF
 }
@@ -386,6 +387,9 @@ case "${1:-}" in
     ;;
   diagnose)
     diagnose
+    ;;
+  version|--version)
+    echo "z13-power 1.1.0"
     ;;
   setup-undervolt)
     setup_undervolt
