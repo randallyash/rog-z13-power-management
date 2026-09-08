@@ -66,7 +66,7 @@ from z13_power_common import (  # noqa: E402
     BATTERY_PATH, CONFIG_PATH, FILL_DONE_CAPACITY,
     LIGHTING_PATH, STATE_DIR, STATUS_PATH, TWEAKS_PATH,
     apply_saved_charge_limit, load_battery_conf, read_power,
-    save_battery_conf, theme_mod as _theme_mod, write_armoury_ppt,
+    runtime_dir, save_battery_conf, theme_mod as _theme_mod, write_armoury_ppt,
     write_charge_threshold, write_wmi_ppt, read_wmi_pl1, z13ctl, z13ctl_ok,
 )
 COMMAND_PATH = os.path.join(STATE_DIR, "command.json")
@@ -2190,8 +2190,9 @@ class Service:
         gs = gamescope_xdisplay()
         if not gs:
             return False
-        local = os.path.expanduser("~/.local/bin/z13-power-overlay")
-        cmd = local if os.access(local, os.X_OK) else "z13-power-overlay"
+        rdir = runtime_dir()
+        sibling = os.path.join(rdir, "z13-power-overlay") if rdir else ""
+        cmd = sibling if sibling and os.access(sibling, os.X_OK) else "z13-power-overlay"
         env = os.environ.copy()
         env["DISPLAY"] = gs
         env.pop("WAYLAND_DISPLAY", None)
@@ -2207,8 +2208,9 @@ class Service:
         """Tray / Settings… — always the host settings window."""
         if panel_pids("z13-power-settings"):
             return
-        local = os.path.expanduser("~/.local/bin/z13-power-settings")
-        cmd = local if os.access(local, os.X_OK) else "z13-power-settings"
+        rdir = runtime_dir()
+        sibling = os.path.join(rdir, "z13-power-settings") if rdir else ""
+        cmd = sibling if sibling and os.access(sibling, os.X_OK) else "z13-power-settings"
         try:
             subprocess.Popen([cmd])
         except OSError:

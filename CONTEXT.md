@@ -36,7 +36,9 @@ Packaged as `z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
   no-ops elsewhere)
 - `kde/powerdevilrc` — display/DPMS-only template (no RunScript hooks; KDE only)
 - `install.sh` — from-source installer (fallback; package is preferred); deploys
-  powerdevilrc only when running KDE Plasma (detected via XDG_CURRENT_DESKTOP)
+  powerdevilrc only when running KDE Plasma (detected via XDG_CURRENT_DESKTOP).
+  Copies the *whole* runtime (CLI, service, settings, overlay, common, io,
+  theme). Never copies only `z13-power` into `/usr/share`.
 - `LICENSE` — GPL-3.0-or-later
 
 ## Mode → z13ctl mapping

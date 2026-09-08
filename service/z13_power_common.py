@@ -34,6 +34,17 @@ _ac_online_path = None
 _bat_capacity_path = None
 
 
+def runtime_dir():
+    """Directory that holds a complete z13-power runtime (settings + common)."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    for path in (here, "/usr/share/z13-power-management",
+                 os.path.expanduser("~/.local/bin")):
+        if (os.access(os.path.join(path, "z13-power-settings"), os.X_OK)
+                and os.path.isfile(os.path.join(path, "z13_power_common.py"))):
+            return path
+    return None
+
+
 def theme_mod():
     """Load z13_power_theme from beside this file, share dir, or ~/.local/bin."""
     here = os.path.dirname(os.path.realpath(__file__))

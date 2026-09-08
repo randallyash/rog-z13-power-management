@@ -37,6 +37,17 @@ Packagers: ship `service/z13_power_io.py` next to `z13_power_common.py`.
 
 ---
 
+## One runtime
+
+Settings, Diagnose, the tray, and `z13-power settings` now launch the
+**same** prefix: the directory that holds `z13-power-settings` next to
+`z13_power_common.py`. Packaged `/usr/share` wins when the CLI is the
+`/usr/bin` symlink. `install.sh` no longer copies only the CLI into a
+packaged prefix (that is how lottery vanished after reboot: flyout opened
+`/usr/share` Settings from August, tray ran `~/.local`).
+
+---
+
 ## Omarchy — the battery widget *is* z13-power
 
 Install no longer leaves a stray bolt next to the battery. 
