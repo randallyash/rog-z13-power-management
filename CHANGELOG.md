@@ -39,11 +39,13 @@ Packagers: ship `service/z13_power_io.py` next to `z13_power_common.py`.
 
 ## Tablet Quiet
 
-Keyboard off (USB dock `0b05:1a30` gone) or Asus WMI `SW_TABLET_MODE`
-latches **Quiet**, same recipe as low-battery. Keyboard back or hinge
-laptop → **Automatic**. A manual pick while it is a tablet sticks until
-the keyboard returns. `tablet_quiet = false` in `service.conf` disables
-it. The flyout hero reads **TABLET**. Not a GZ302: no-op.
+Handheld tablet — Asus WMI `SW_TABLET_MODE` or the dock keyboard
+(`0b05:1a30`) gone, **and no external display** — latches **Quiet**.
+Keyboard-off while HDMI / USB-C is driving a TV keeps current power
+(Automatic / Max). Unplug the TV or attach the keyboard and it
+re-evaluates. A manual pick while latched sticks until posture changes.
+`tablet_quiet = false` disables it. The flyout hero reads **TABLET**.
+Not a GZ302: no-op.
 
 ---
 

@@ -58,6 +58,28 @@ def _is_gz302():
     return "GZ302" in name or "Flow Z13" in name
 
 
+def external_display_connected():
+    """True when an external DRM sink is connected (HDMI / USB-C DP). eDP ignored."""
+    try:
+        names = os.listdir("/sys/class/drm")
+    except OSError:
+        return False
+    for name in names:
+        lower = name.lower()
+        if "edp" in lower or "writeback" in lower:
+            continue
+        if not any(tag in lower for tag in ("hdmi", "dp-", "displayport", "dvi")):
+            continue
+        path = os.path.join("/sys/class/drm", name, "status")
+        try:
+            with open(path, encoding="ascii") as fh:
+                if fh.read().strip() == "connected":
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 def usb_dock_keyboard_present():
     """True if the ASUS GZ302 dock keyboard (0b05:1a30) is enumerated."""
     try:
@@ -128,19 +150,24 @@ def _sw_tablet_mode():
 
 
 def read_tablet():
-    """True when the GZ302 is a tablet (hinge tablet-mode or dock keyboard off).
+    """True for handheld tablet posture that should latch Quiet.
 
-    Other machines return False. Does not consume evdev events (ioctl only),
-    so the compositor still sees SW_TABLET_MODE for rotation.
+    Hinge SW_TABLET_MODE or a missing dock keyboard is a tablet *pose*.
+    An external display (TV / USB-C dock) means it is a living-room
+    machine and must keep high power — keyboard-off-to-the-TV is not Quiet.
+    Other machines return False. ioctl-only for SW_TABLET_MODE so the
+    compositor still gets rotation events.
     """
     if not _is_gz302():
         return False
     sw = _sw_tablet_mode()
-    if sw is True:
-        return True
-    if not usb_dock_keyboard_present():
-        return True
-    return False
+    kbd = usb_dock_keyboard_present()
+    posed = (sw is True) or (not kbd)
+    if not posed:
+        return False
+    if external_display_connected():
+        return False
+    return True
 
 
 def runtime_dir():

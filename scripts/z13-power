@@ -291,11 +291,19 @@ for d in ("/usr/share/z13-power-management", os.path.expanduser("~/.local/bin"))
     if os.path.isfile(os.path.join(d, "z13_power_common.py")):
         sys.path.insert(0, d)
         break
-from z13_power_common import read_tablet, usb_dock_keyboard_present
+from z13_power_common import (
+    external_display_connected, read_tablet, usb_dock_keyboard_present)
 t = read_tablet()
 kbd = usb_dock_keyboard_present()
-print("[ OK ] tablet: %s (dock keyboard %s)" % (
-    "Quiet latch" if t else "laptop", "present" if kbd else "absent"))
+ext = external_display_connected()
+if t:
+    pose = "Quiet latch"
+elif ext and not kbd:
+    pose = "TV/dock (high power)"
+else:
+    pose = "laptop"
+print("[ OK ] tablet: %s (dock keyboard %s, external display %s)" % (
+    pose, "present" if kbd else "absent", "yes" if ext else "no"))
 PY
   then
     :

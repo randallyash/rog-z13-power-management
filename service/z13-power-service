@@ -12,9 +12,10 @@
 #     power-source change and return to Automatic
 #   - "Lock profile": a manual pick survives power changes (low battery still
 #     forces the safety profile, then restores your locked pick)
-#   - tablet / keyboard-off: Quiet (same recipe as on_low_battery); keyboard
-#     back returns to Automatic. A manual pick while in tablet sticks until
-#     the keyboard returns.
+#   - handheld tablet (hinge tablet-mode or dock keyboard off, and no
+#     external display): Quiet. Keyboard-off to a TV/monitor keeps
+#     Automatic / current power. Keyboard back or HDMI unplug re-evaluates.
+#     A manual pick while latched sticks until posture changes.
 #   - "Charge to 100%": one-shot fill this plug-in; saved cap is unchanged
 #     and returns when the pack is full or the charger is pulled
 #   - "Settings…": opens the settings window; its Profiles tab edits the
@@ -160,8 +161,9 @@ on_ac = performance
 on_battery = balanced
 on_low_battery = silent
 
-# Keyboard off or hinge tablet-mode (GZ302 only) -> on_tablet, then
-# Automatic when the dock keyboard is back. Set false to ignore posture.
+# Handheld tablet (GZ302): hinge tablet-mode or dock keyboard off, and
+# no HDMI/USB-C display. Quiet. Keyboard-off while a TV is connected
+# does NOT latch Quiet. Set false to ignore posture.
 tablet_quiet = true
 on_tablet = silent
 
@@ -1127,7 +1129,7 @@ class PowerMonitor(QThread):
 
 
 class TabletMonitor(QThread):
-    """USB add/remove for the GZ302 dock keyboard (0b05:1a30)."""
+    """USB dock keyboard add/remove (0b05:1a30)."""
 
     event = pyqtSignal()
 
@@ -1147,6 +1149,22 @@ class TabletMonitor(QThread):
                 vid = b""
             if vid == b"0b05":
                 self.event.emit()
+
+
+class DisplayMonitor(QThread):
+    """DRM connector changes (HDMI / USB-C TV dock)."""
+
+    event = pyqtSignal()
+
+    def run(self):
+        try:
+            ctx = pyudev.Context()
+            monitor = pyudev.Monitor.from_netlink(ctx)
+            monitor.filter_by(subsystem="drm")
+        except Exception:
+            return
+        for _device in monitor:
+            self.event.emit()
 
 
 if _DBUS_NEXT_OK:
@@ -1674,6 +1692,9 @@ class Service:
         self.tablet_mon = TabletMonitor()
         self.tablet_mon.event.connect(self.on_tablet_event)
         self.tablet_mon.start()
+        self.display_mon = DisplayMonitor()
+        self.display_mon.event.connect(self.on_tablet_event)
+        self.display_mon.start()
         self.tablet_timer = QTimer()
         self.tablet_timer.timeout.connect(self.on_tablet_event)
         self.tablet_timer.start(2000)
