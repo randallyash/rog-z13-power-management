@@ -37,6 +37,15 @@ Packagers: ship `service/z13_power_io.py` next to `z13_power_common.py`.
 
 ---
 
+## Custom TDP
+
+Max is gone as a named pill. **Custom** is a 5–93 W slider (Low through
+old Max), default 75 W. Stored in `tweaks.conf` as `custom_tdp`. In-game
+overlay has the Custom button, no slider. `z13-power max` still means
+93 W. Above 75 W uses `--force` so PL1 actually binds.
+
+---
+
 ## Tablet Quiet
 
 Handheld tablet — Asus WMI `SW_TABLET_MODE` or the dock keyboard

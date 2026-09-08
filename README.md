@@ -17,7 +17,7 @@ Works on Omarchy, Hyprland, KDE Plasma, and anything with a system tray.
 
 **Power**
 - Plug in → Performance. Unplug → Balanced. Low battery → Quiet.
-- Five modes with TDP, fan, and undervolt that actually stick. Quiet is a real **20 W** lock.
+- Four recipes plus **Custom** (5–93 W slider). Quiet is a real **20 W** lock.
 - Lock a manual pick across plug/unplug. Low battery still forces Quiet, then restores it.
 - Handheld tablet (keyboard off or tablet hinge, no TV) → Quiet. Keyboard-off to a TV keeps high power.
 - Charge limit 40–100%, re-applied at login. One-shot *charge to 100%* for this plug-in only.
@@ -30,7 +30,7 @@ Works on Omarchy, Hyprland, KDE Plasma, and anything with a system tray.
 - Everywhere else: a tinted tray bolt. Left-click cycles; right-click opens the menu.
 - The **Armory Crate** side button opens settings on the desktop.
 - Nested **gamescope** (Steam, Lutris, Heroic) gets an in-game profile picker.
-- CLI: `z13-power max` · `performance` · `balanced` · `silent` · `lowpower`.
+- CLI: `z13-power custom` · `performance` · `balanced` · `silent` · `lowpower`. `max` is custom 93.
 
 </td>
 </tr>
@@ -63,7 +63,7 @@ Works on Omarchy, Hyprland, KDE Plasma, and anything with a system tray.
 | `performance` | **AC** | 75 / 75 / 93 / 93 | reset |
 | `balanced` | **Battery** | 52 / 71 / 70 | reset |
 | `silent` | **Low battery** | 20 / 20 / 20 | −20 mV |
-| `max` | manual | 93 forced | reset |
+| `custom` | manual | 5–93 slider | reset |
 | `lowpower` | manual | 5 | −25 mV |
 
 `z13-power status` prints the live state. `z13-power settings` opens the window
@@ -295,7 +295,7 @@ automatically every ~30s — no service restart needed.
   Omarchy, `z13-power-omarchy-setup` replaces the bar's Power slot with
   `z13.power` so that flyout talks to us instead of `powerprofiles-set`.
   Keep the service as the single profile switcher.
-- The `max` / `lowpower` modes are manual (tray menu or terminal) — they are not
+- The `custom` / `lowpower` modes are manual (tray menu or terminal) — they are not
   wired into any power state.
 - Requires the z13ctl **daemon** running for TDP/fancurve/undervolt persistence.
   Check with `systemctl --user status z13ctl`.

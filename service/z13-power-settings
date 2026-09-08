@@ -48,7 +48,7 @@ _add_share_path()
 from z13_power_common import (  # noqa: E402
     CHARGE_LIMIT_PATH as BAT_LIMIT_PATH, CONFIG_PATH,
     LIGHTING_PATH, STATUS_PATH, TWEAKS_PATH,
-    load_charge_limit, load_fill_once, save_charge_limit,
+    load_charge_limit, load_fill_once, save_charge_limit, save_tweaks_conf,
     theme_mod as _theme_mod, z13ctl,
 )
 from z13_power_io import (  # noqa: E402
@@ -87,7 +87,7 @@ MODE_OPTIONS = [
     ("performance", "Performance"),
     ("balanced", "Balanced"),
     ("silent", "Quiet"),
-    ("max", "Max"),
+    ("custom", "Custom"),
     ("lowpower", "Low power"),
 ]
 VALID_MODES = [m[0] for m in MODE_OPTIONS]
@@ -148,15 +148,7 @@ def save_undervolt(val):
     val = int(val)
     if load_undervolt() == val:
         return
-    cfg = configparser.ConfigParser()
-    cfg.add_section("tweaks")
-    cfg.set("tweaks", "undervolt", str(val))
-    buf = io.StringIO()
-    cfg.write(buf)
-    try:
-        write_user_file([".config", "z13-power"], "tweaks.conf", buf.getvalue().encode("utf-8"))
-    except (IoError, OSError):
-        return
+    save_tweaks_conf({"undervolt": str(val)})
 
 
 def ryzen_smu_loaded():

@@ -27,6 +27,9 @@ CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
 BATTERY_PATH = os.path.expanduser("~/.config/z13-power/battery.conf")
 TWEAKS_PATH = os.path.expanduser("~/.config/z13-power/tweaks.conf")
+CUSTOM_TDP_MIN = 5
+CUSTOM_TDP_MAX = 93
+CUSTOM_TDP_DEFAULT = 75
 CHARGE_LIMIT_PATH = "/sys/class/power_supply/BAT0/charge_control_end_threshold"
 STATE_DIR = os.path.expanduser("~/.local/state/z13-power")
 STATUS_PATH = os.path.join(STATE_DIR, "status.json")
@@ -168,6 +171,90 @@ def read_tablet():
     if external_display_connected():
         return False
     return True
+
+
+def clamp_custom_tdp(watts):
+    try:
+        n = int(watts)
+    except (TypeError, ValueError):
+        return CUSTOM_TDP_DEFAULT
+    return max(CUSTOM_TDP_MIN, min(CUSTOM_TDP_MAX, n))
+
+
+def load_tweaks_conf():
+    """Return the [tweaks] dict (undervolt, custom_tdp, …)."""
+    out = {}
+    text = bounded_text(read_user_file([".config", "z13-power"], "tweaks.conf"))
+    if text is None:
+        return out
+    cfg = configparser.ConfigParser()
+    try:
+        cfg.read_string(text)
+    except (configparser.Error, ValueError):
+        return out
+    if not cfg.has_section("tweaks"):
+        return out
+    for key in cfg.options("tweaks"):
+        out[key] = cfg.get("tweaks", key).strip()
+    return out
+
+
+def save_tweaks_conf(updates):
+    """Merge keys into tweaks.conf without dropping the others."""
+    cur = load_tweaks_conf()
+    cur.update(updates)
+    cfg = configparser.ConfigParser()
+    cfg.add_section("tweaks")
+    for key, val in cur.items():
+        if val is None or val == "":
+            continue
+        cfg.set("tweaks", key, str(val))
+    buf = io.StringIO()
+    cfg.write(buf)
+    try:
+        write_user_file([".config", "z13-power"], "tweaks.conf",
+                        buf.getvalue().encode("utf-8"))
+    except (IoError, OSError):
+        return
+
+
+def load_custom_tdp():
+    raw = load_tweaks_conf().get("custom_tdp")
+    if raw is None or raw == "":
+        return CUSTOM_TDP_DEFAULT
+    return clamp_custom_tdp(raw)
+
+
+def save_custom_tdp(watts):
+    watts = clamp_custom_tdp(watts)
+    if load_custom_tdp() == watts:
+        return watts
+    save_tweaks_conf({"custom_tdp": str(watts)})
+    return watts
+
+
+def custom_mode_def(watts):
+    """Recipe for the Custom pill: PL1=PL2=PL3=watts, 5–93."""
+    w = clamp_custom_tdp(watts)
+    if w <= 5:
+        return {
+            "profile": "quiet", "tdp": "5", "tdp_force": "false",
+            "fancurve": "reset", "undervolt": "reset",
+        }
+    if w < 75:
+        return {
+            "profile": "balanced", "tdp": f"{w} {w} {w}",
+            "tdp_force": "false", "fancurve": "reset", "undervolt": "reset",
+        }
+    md = {
+        "profile": "performance",
+        "tdp": str(w) if w > 75 else f"{w} {w} {w}",
+        "tdp_force": "true" if w > 75 else "false",
+        "undervolt": "reset",
+    }
+    if w <= 75:
+        md["fancurve"] = "reset"
+    return md
 
 
 def runtime_dir():

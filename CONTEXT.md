@@ -47,7 +47,8 @@ Packaged as `z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
 |------|----------------|
 | balanced | profile balanced; tdp 52/71/70; fancurve reset; undervolt reset |
 | performance | profile performance; tdp 75/75/93/93; fancurve reset; undervolt reset |
-| max | profile performance; tdp 93 --force; undervolt reset |
+| custom | TDP 5–93 from tweaks.conf `custom_tdp` (default 75); `--force` above 75 W |
+| max | alias for custom 93 |
 | silent | profile quiet; tdp 20/40/40; fancurve reset; undervolt -20 |
 | lowpower | profile quiet; tdp 5; fancurve reset; undervolt -25 |
 | status | prints profile/tdp/fancurve/undervolt |

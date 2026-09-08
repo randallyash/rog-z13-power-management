@@ -69,8 +69,9 @@ _add_share_path()
 from z13_power_common import (  # noqa: E402
     BATTERY_PATH, CONFIG_PATH, FILL_DONE_CAPACITY,
     LIGHTING_PATH, STATE_DIR, STATUS_PATH, TWEAKS_PATH,
-    apply_saved_charge_limit, load_battery_conf, read_power, read_tablet,
-    runtime_dir, save_battery_conf, theme_mod as _theme_mod, write_armoury_ppt,
+    apply_saved_charge_limit, custom_mode_def, load_battery_conf,
+    load_custom_tdp, read_power, read_tablet, runtime_dir, save_battery_conf,
+    save_custom_tdp, theme_mod as _theme_mod, write_armoury_ppt,
     write_charge_threshold, write_wmi_ppt, read_wmi_pl1, z13ctl, z13ctl_ok,
 )
 COMMAND_PATH = os.path.join(STATE_DIR, "command.json")
@@ -92,11 +93,13 @@ MODES = {
     "performance": "Performance",
     "balanced": "Balanced",
     "silent": "Quiet",
-    "max": "Max",
+    "custom": "Custom",
+    "max": "Custom",
     "lowpower": "Low power",
 }
-MODE_ORDER = ["max", "performance", "balanced", "silent", "lowpower"]
+MODE_ORDER = ["custom", "performance", "balanced", "silent", "lowpower"]
 MODE_GLYPHS = {
+    "custom": "\uf0e7",
     "max": "\uf0e7",
     "performance": "\U000f04c5",
     "balanced": "\U000f04ba",
@@ -109,6 +112,7 @@ MODE_COLORS = {
     "performance": "#ff3131",
     "balanced": "#2ec4ff",
     "silent": "#3ddc6f",
+    "custom": "#ff8c00",
     "max": "#ff8c00",
     "lowpower": "#ffd23f",
 }
@@ -121,6 +125,8 @@ DEFAULT_MODES = {
     # Firmware "quiet" pins SMU ~40W and ignores PPT. Balanced + hard 20W.
     "silent": {"profile": "balanced", "tdp": "20 20 20",
                "tdp_force": "false", "fancurve": "reset", "undervolt": "-20"},
+    "custom": {"profile": "performance", "tdp": "75 75 75",
+               "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
     "max": {"profile": "performance", "tdp": "93",
             "tdp_force": "true", "undervolt": "reset"},
     "lowpower": {"profile": "quiet", "tdp": "5",
@@ -134,7 +140,7 @@ CONFIG_TEMPLATE = """\
 #  (no restart needed). Edit on_ac / on_battery / on_low_battery / low_battery
 #  / tablet_quiet from the settings window (Profiles tab) or this file.
 #
-#  Modes: performance | balanced | silent | max | lowpower
+#  Modes: performance | balanced | silent | custom | lowpower
 #  Firmware profiles: quiet | balanced | performance
 # =============================================================================
 
@@ -144,8 +150,8 @@ low_battery = 15
 
 # Which MODE to apply in each power state, used while the tray is on "Automatic".
 #
-# Valid modes:  performance | balanced | silent | max | lowpower
-#   max=93W, performance=75W, balanced=52W, silent=20W, lowpower=5W
+# Valid modes:  performance | balanced | silent | custom | lowpower
+#   custom=5–93W slider, performance=75W, balanced=52W, silent=20W, lowpower=5W
 #   (each one is defined in a [modes.<name>] section below).
 #
 # A MODE is a complete recipe: firmware profile + TDP limits + fan curve +
@@ -207,12 +213,13 @@ on_tablet = silent
 #                them on startup/resume.
 # -----------------------------------------------------------------------------
 
-[modes.max]
+[modes.custom]
+# Live watts come from tweaks.conf custom_tdp (5–93, default 75).
+# This section is only a fallback if that key is missing.
 profile = performance
-tdp = 93
-tdp_force = true
-# No fancurve line: reset is refused above 75W PL1 — the --force safety curve
-# (50% PWM floor -> 100% at 80C) stays in effect at 93W.
+tdp = 75 75 75
+tdp_force = false
+fancurve = reset
 undervolt = reset
 
 [modes.performance]
@@ -578,7 +585,9 @@ def load_config(force=False):
     for key in ("on_ac", "on_battery", "on_low_battery", "on_tablet"):
         try:
             value = cfg.get("service", key).strip()
-            if value in MODES:
+            if value == "max":
+                value = "custom"
+            if value in MODE_ORDER:
                 out[key] = value
         except configparser.Error:
             pass
@@ -594,7 +603,9 @@ def load_config(force=False):
         if not section.startswith("modes."):
             continue
         name = section[len("modes."):]
-        if name not in MODES:
+        if name == "max":
+            name = "custom"
+        if name not in MODE_ORDER:
             continue
         mode_def = dict(DEFAULT_MODES[name])
         for key in ("profile", "tdp", "tdp_force", "fancurve", "undervolt"):
@@ -2090,7 +2101,10 @@ class Service:
 
     def apply(self, mode, force=False, why="user"):
         """Apply a mode; notify only when it actually changed (or force)."""
-        mode_def = self.cfg["modes"].get(mode) or DEFAULT_MODES[mode]
+        if mode == "custom":
+            mode_def = custom_mode_def(load_custom_tdp())
+        else:
+            mode_def = self.cfg["modes"].get(mode) or DEFAULT_MODES[mode]
         if not apply_mode(mode_def, force=force):
             notify("Power profile error", f"Failed to apply '{mode}'",
                    important=True, glyph="\U000f0026")
@@ -2190,6 +2204,8 @@ class Service:
             self.tray.show()
 
     def _mode_pl1(self, mode):
+        if mode == "custom":
+            return load_custom_tdp()
         mode_def = self.cfg["modes"].get(mode) or DEFAULT_MODES.get(mode) or {}
         parts = str(mode_def.get("tdp", "")).split()
         if parts and parts[0].lstrip("-").isdigit():
@@ -2206,6 +2222,9 @@ class Service:
         if data.get("automatic") is not False:
             return
         mode = data.get("mode")
+        if mode == "max":
+            save_custom_tdp(93)
+            mode = "custom"
         if mode not in MODE_ORDER:
             return
         self.automatic = False
@@ -2228,6 +2247,7 @@ class Service:
             "charge_limit": limit,
             "fill_once": bool(fill_once),
             "tablet": bool(self._tablet),
+            "custom_tdp": load_custom_tdp(),
         }
         if payload == self._status_payload:
             return
@@ -2280,6 +2300,11 @@ class Service:
         op = str(data.get("op") or "")
         if op == "mode":
             mode = str(data.get("mode") or "")
+            if mode == "max":
+                save_custom_tdp(93)
+                mode = "custom"
+            if mode == "custom" and data.get("tdp") is not None:
+                save_custom_tdp(data.get("tdp"))
             if mode in MODE_ORDER:
                 self.manual(mode)
         elif op == "automatic":
