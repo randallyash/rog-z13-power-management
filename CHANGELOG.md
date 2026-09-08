@@ -21,6 +21,17 @@ This is for every **2025 GZ302** on Linux.
 
 ---
 
+## One runtime
+
+The tray, overlay, and `install.sh` now keep a **complete** prefix:
+settings + companions in the same directory. `install.sh` no longer
+copies only the CLI into `/usr/share` (that is how lottery vanished
+after reboot: the flyout opened packaged Settings, the tray ran
+`~/.local`). The Omarchy marketplace plugin still pins the `v1.1.4`
+`/usr` identities; this does not change those hashes.
+
+---
+
 ## Omarchy — the battery widget *is* z13-power
 
 Install no longer leaves a stray bolt next to the battery. 

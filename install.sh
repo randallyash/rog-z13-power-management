@@ -54,23 +54,34 @@ fi
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cp "$SCRIPT_DIR/scripts/z13-power" "$BIN_DIR/z13-power"
-chmod +x "$BIN_DIR/z13-power"
-# packaged installs put the CLI in /usr/bin; keep that copy in sync too when
-# this machine is using the from-source override.
-if [[ -w /usr/share/z13-power-management/z13-power ]]; then
-  cp "$SCRIPT_DIR/scripts/z13-power" /usr/share/z13-power-management/z13-power
+
+install_runtime() {
+  local dest="$1"
+  mkdir -p "$dest"
+  install -m755 "$SCRIPT_DIR/scripts/z13-power" "$dest/z13-power"
+  install -m755 "$SCRIPT_DIR/service/z13-power-service" "$dest/z13-power-service"
+  install -m755 "$SCRIPT_DIR/service/z13-power-settings" "$dest/z13-power-settings"
+  install -m755 "$SCRIPT_DIR/service/z13-power-overlay" "$dest/z13-power-overlay"
+  install -m644 "$SCRIPT_DIR/service/z13_power_theme.py" "$dest/z13_power_theme.py"
+  install -m644 "$SCRIPT_DIR/service/z13_power_common.py" "$dest/z13_power_common.py"
+  install -m644 "$SCRIPT_DIR/service/z13_power_io.py" "$dest/z13_power_io.py"
+}
+
+install_runtime "$BIN_DIR"
+OK "Installed z13-power runtime to $BIN_DIR"
+# Never copy only the CLI into a packaged prefix — that split is how
+# Settings lost lottery (flyout opens /usr/share, tray ran ~/.local).
+SHARE=/usr/share/z13-power-management
+if [[ -d "$SHARE" ]]; then
+  if [[ -w "$SHARE" ]]; then
+    install_runtime "$SHARE"
+    OK "Replaced packaged runtime at $SHARE (same files as $BIN_DIR)"
+  else
+    WARN "Packaged runtime at $SHARE is not writable; PATH prefers /usr/bin."
+    WARN "The marketplace plugin and 'z13-power settings' need the full tree there."
+    WARN "Unify with: sudo install -d $SHARE && sudo $0"
+  fi
 fi
-cp "$SCRIPT_DIR/service/z13-power-service" "$BIN_DIR/z13-power-service"
-chmod +x "$BIN_DIR/z13-power-service"
-cp "$SCRIPT_DIR/service/z13-power-settings" "$BIN_DIR/z13-power-settings"
-chmod +x "$BIN_DIR/z13-power-settings"
-cp "$SCRIPT_DIR/service/z13-power-overlay" "$BIN_DIR/z13-power-overlay"
-chmod +x "$BIN_DIR/z13-power-overlay"
-cp "$SCRIPT_DIR/service/z13_power_theme.py" "$BIN_DIR/z13_power_theme.py"
-cp "$SCRIPT_DIR/service/z13_power_common.py" "$BIN_DIR/z13_power_common.py"
-cp "$SCRIPT_DIR/service/z13_power_io.py" "$BIN_DIR/z13_power_io.py"
-OK "Installed z13-power + z13-power-service + z13-power-settings + z13-power-overlay to $BIN_DIR"
 
 if ! python3 -c "import PyQt6, pyudev" >/dev/null 2>&1; then
   WARN "z13-power-service needs python-pyqt6 + pyudev — install: paru -S python-pyqt6 python-pyudev"
@@ -80,13 +91,22 @@ if ! command -v notify-send >/dev/null 2>&1; then
 fi
 
 UNIT_DIR="$HOME/.config/systemd/user"
-mkdir -p "$UNIT_DIR"
-sed "s|/usr/bin/z13-power-service|$BIN_DIR/z13-power-service|" \
-  "$SCRIPT_DIR/service/z13-power-service.service" > "$UNIT_DIR/z13-power-service.service"
-systemctl --user daemon-reload
-systemctl --user enable --now z13-power-service.service 2>/dev/null || \
-  WARN "Could not enable z13-power-service — start it with: systemctl --user start z13-power-service"
-OK "Enabled z13-power-service (tray icon + power watcher)"
+if [[ -w "${SHARE:-/usr/share/z13-power-management}" ]]; then
+  rm -f "$UNIT_DIR/z13-power-service.service"
+  rm -f "$UNIT_DIR/z13-power-service.service.d/override.conf"
+  systemctl --user daemon-reload
+  systemctl --user enable --now z13-power-service.service 2>/dev/null || \
+    WARN "Could not enable z13-power-service — start it with: systemctl --user start z13-power-service"
+  OK "Enabled packaged z13-power-service (/usr/bin, not ~/.local)"
+else
+  mkdir -p "$UNIT_DIR"
+  sed "s|/usr/bin/z13-power-service|$BIN_DIR/z13-power-service|" \
+    "$SCRIPT_DIR/service/z13-power-service.service" > "$UNIT_DIR/z13-power-service.service"
+  systemctl --user daemon-reload
+  systemctl --user enable --now z13-power-service.service 2>/dev/null || \
+    WARN "Could not enable z13-power-service — start it with: systemctl --user start z13-power-service"
+  OK "Enabled z13-power-service (tray icon + power watcher) from $BIN_DIR"
+fi
 
 cp "$SCRIPT_DIR/scripts/z13-power-omarchy-setup" "$BIN_DIR/z13-power-omarchy-setup"
 chmod +x "$BIN_DIR/z13-power-omarchy-setup"
@@ -173,12 +193,12 @@ Remaining manual steps:
   2. The tray icon should be in the system tray — click it to switch profiles.
      Profile switching (AC -> performance, battery -> balanced, low -> silent)
      is handled automatically by z13-power-service.
-   3. (Optional) The Meta+B panel button runs: ~/.local/bin/z13-power settings
+   3. (Optional) The Meta+B panel button runs: z13-power settings
      to open the settings window (lighting, fan curve, battery, power). On
      non-KDE desktops, bind that command to a key/combo of your choice.
    4. Non-KDE Wayland (Hyprland/Omarchy): the tray icon needs an SNI-capable
      system tray and popups need a notification daemon — most setups (incl.
      Omarchy) ship both. Confirm the tray icon appears; if not, add a tray host.
 
-To verify: run  ~/.local/bin/z13-power status
+To verify: run  z13-power status
 EOF

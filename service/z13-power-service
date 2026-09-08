@@ -70,6 +70,23 @@ from z13_power_common import (  # noqa: E402
 )
 COMMAND_PATH = os.path.join(STATE_DIR, "command.json")
 
+
+def _complete_bin(name):
+    """Prefer a complete /usr/share runtime so tray Settings matches the flyout."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    seen = set()
+    for d in ("/usr/share/z13-power-management", here,
+              os.path.expanduser("~/.local/bin")):
+        if d in seen:
+            continue
+        seen.add(d)
+        cmd = os.path.join(d, name)
+        if (os.access(cmd, os.X_OK)
+                and os.path.isfile(os.path.join(d, "z13_power_common.py"))
+                and os.path.isfile(os.path.join(d, "z13_power_io.py"))):
+            return cmd
+    return name
+
 try:
     from dbus_next import (DBusError, Message, MessageType, PropertyAccess,
                            Variant)
@@ -2189,8 +2206,7 @@ class Service:
         gs = gamescope_xdisplay()
         if not gs:
             return False
-        local = os.path.expanduser("~/.local/bin/z13-power-overlay")
-        cmd = local if os.access(local, os.X_OK) else "z13-power-overlay"
+        cmd = _complete_bin("z13-power-overlay")
         env = os.environ.copy()
         env["DISPLAY"] = gs
         env.pop("WAYLAND_DISPLAY", None)
@@ -2206,8 +2222,7 @@ class Service:
         """Tray / Settings… — always the host settings window."""
         if panel_pids("z13-power-settings"):
             return
-        local = os.path.expanduser("~/.local/bin/z13-power-settings")
-        cmd = local if os.access(local, os.X_OK) else "z13-power-settings"
+        cmd = _complete_bin("z13-power-settings")
         try:
             subprocess.Popen([cmd])
         except OSError:

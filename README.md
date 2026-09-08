@@ -157,9 +157,10 @@ This GitHub tree is clone / makepkg and the Omarchy marketplace pin
 (`v1.1.4`, exact `/usr` identities).
 
 Clone this repo from GitHub, then either build the Arch package (system-wide,
-scripts in `/usr/bin`) or run the from-source installer (user-local,
-`~/.local/bin`). The marketplace plugin only accepts the `/usr/share`
-install; `install.sh` is the tray/settings path for everyone else.
+scripts in `/usr/bin`) or run the from-source installer. The marketplace
+plugin only accepts a complete `/usr/share/z13-power-management` tree.
+`install.sh` writes that full runtime when the directory is writable —
+it will not copy only the CLI and leave stale Settings behind.
 
 `z13ctl-bin` is an AUR package and is required either way. Pacman will pull
 the Python deps for the Arch package; `install.sh` expects you to have them
