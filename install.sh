@@ -200,5 +200,5 @@ Remaining manual steps:
      system tray and popups need a notification daemon — most setups (incl.
      Omarchy) ship both. Confirm the tray icon appears; if not, add a tray host.
 
-To verify: run  ~/.local/bin/z13-power status
+To verify: run  z13-power status
 EOF
