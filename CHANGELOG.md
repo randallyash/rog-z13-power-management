@@ -21,6 +21,22 @@ This is for every **2025 GZ302** on Linux.
 
 ---
 
+## Bounded settings I/O
+
+Conf and status reads are size-capped. Writes go through an exclusive temp
+file, fsync, then rename. Helpers (`z13ctl`, `xdg-open`, `fc-match`, …) are
+time-capped and reaped. `z13-power --version` prints `z13-power 1.1.0`.
+
+This is **not** the Omarchy marketplace pin. GitHub tags `v1.1.1`–`v1.1.4`
+require an exact `/usr/bin/z13ctl` digest and refuse `~/.local/bin`. This
+tree still supports paru `z13-power-git` / `z13ctl-bin` (including a rebuilt
+binary), `./install.sh` into `~/.local/bin`, and the tray bolt on KDE /
+Cachy / any SNI host — Omarchy is optional.
+
+Packagers: ship `service/z13_power_io.py` next to `z13_power_common.py`.
+
+---
+
 ## Omarchy — the battery widget *is* z13-power
 
 Install no longer leaves a stray bolt next to the battery. 

@@ -28,6 +28,8 @@ Packaged as `z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
 - `service/z13-power-service` — tray + watcher (PyQt6): the only notifier
 - `service/z13-power-settings` — settings window (PyQt6): z13gui replacement
 - `service/z13_power_common.py` — shared paths, z13ctl, battery.conf / charge cap
+- `service/z13_power_io.py` — bounded conf/status I/O and helper processes
+  (prefer /usr/bin, PATH fallback; no marketplace digest pin)
 - `service/z13-power-overlay` — slim in-game profile picker for nested gamescope
 - `service/z13-power-service.service` — systemd user unit (graphical-session.target)
 - `contrib/z13-power-config` — deploys display-only powerdevilrc (KDE Plasma only;
