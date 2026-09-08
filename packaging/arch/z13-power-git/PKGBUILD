@@ -46,6 +46,7 @@ package() {
   install -m644 service/z13_power_theme.py "$pkgdir/usr/share/z13-power-management/z13_power_theme.py"
   # shared paths/z13ctl/battery helpers (service + settings load via _add_share_path())
   install -m644 service/z13_power_common.py "$pkgdir/usr/share/z13-power-management/z13_power_common.py"
+  install -m644 service/z13_power_io.py "$pkgdir/usr/share/z13-power-management/z13_power_io.py"
   # config deploy helper + display-only powerdevilrc template
   install -m755 contrib/z13-power-config "$pkgdir/usr/share/z13-power-management/z13-power-config"
   ln -s /usr/share/z13-power-management/z13-power-config "$pkgdir/usr/bin/z13-power-config"

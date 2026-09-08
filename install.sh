@@ -69,6 +69,7 @@ cp "$SCRIPT_DIR/service/z13-power-overlay" "$BIN_DIR/z13-power-overlay"
 chmod +x "$BIN_DIR/z13-power-overlay"
 cp "$SCRIPT_DIR/service/z13_power_theme.py" "$BIN_DIR/z13_power_theme.py"
 cp "$SCRIPT_DIR/service/z13_power_common.py" "$BIN_DIR/z13_power_common.py"
+cp "$SCRIPT_DIR/service/z13_power_io.py" "$BIN_DIR/z13_power_io.py"
 OK "Installed z13-power + z13-power-service + z13-power-settings + z13-power-overlay to $BIN_DIR"
 
 if ! python3 -c "import PyQt6, pyudev" >/dev/null 2>&1; then

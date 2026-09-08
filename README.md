@@ -150,9 +150,16 @@ z13ctl's own autoswitch only supports AC/battery.
 
 ## Install
 
+Packaged Arch (`paru -S z13-power-git`) stays on Fifthdread's paru repo —
+that tree does **not** pin a z13ctl digest and still supports `~/.local/bin`.
+See [Fifthdread/rog-z13-power-management](https://forgejo.fifthdread.com/Fifthdread/rog-z13-power-management).
+This GitHub tree is clone / makepkg and the Omarchy marketplace pin
+(`v1.1.4`, exact `/usr` identities).
+
 Clone this repo from GitHub, then either build the Arch package (system-wide,
 scripts in `/usr/bin`) or run the from-source installer (user-local,
-`~/.local/bin`).
+`~/.local/bin`). The marketplace plugin only accepts the `/usr/share`
+install; `install.sh` is the tray/settings path for everyone else.
 
 `z13ctl-bin` is an AUR package and is required either way. Pacman will pull
 the Python deps for the Arch package; `install.sh` expects you to have them
