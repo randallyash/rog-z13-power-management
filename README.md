@@ -19,6 +19,7 @@ Works on Omarchy, Hyprland, KDE Plasma, and anything with a system tray.
 - Plug in → Performance. Unplug → Balanced. Low battery → Quiet.
 - Five modes with TDP, fan, and undervolt that actually stick. Quiet is a real **20 W** lock.
 - Lock a manual pick across plug/unplug. Low battery still forces Quiet, then restores it.
+- Handheld tablet (keyboard off or tablet hinge, no TV) → Quiet. Keyboard-off to a TV keeps high power.
 - Charge limit 40–100%, re-applied at login. One-shot *charge to 100%* for this plug-in only.
 
 </td>

@@ -21,6 +21,15 @@ This is for every **2025 GZ302** on Linux.
 
 ---
 
+## Tablet Quiet
+
+Handheld tablet — Asus WMI `SW_TABLET_MODE` or the dock keyboard gone,
+**and no external display** — latches **Quiet**. Keyboard-off while
+HDMI / USB-C is driving a TV keeps current power. The tray service
+does this; the marketplace plugin pin hashes are unchanged.
+
+---
+
 ## One runtime
 
 The tray, overlay, and `install.sh` now keep a **complete** prefix:

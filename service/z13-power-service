@@ -12,6 +12,9 @@
 #     power-source change and return to Automatic
 #   - "Lock profile": a manual pick survives power changes (low battery still
 #     forces the safety profile, then restores your locked pick)
+#   - handheld tablet (hinge tablet-mode or dock keyboard off, and no
+#     external display): Quiet. Keyboard-off to a TV/monitor keeps
+#     Automatic / current power.
 #   - "Charge to 100%": one-shot fill this plug-in; saved cap is unchanged
 #     and returns when the pack is full or the charger is pulled
 #   - "Settings…": opens the settings window; its Profiles tab edits the
@@ -28,8 +31,11 @@
 #
 # Requires: z13ctl, notify-send, python-pyqt6, pyudev.
 
+import array
 import asyncio
 import configparser
+import fcntl
+import glob
 import grp
 import json
 import os
@@ -86,6 +92,127 @@ def _complete_bin(name):
                 and os.path.isfile(os.path.join(d, "z13_power_io.py"))):
             return cmd
     return name
+
+
+_TABLET_KBD_VID = "0b05"
+_TABLET_KBD_PID = "1a30"
+_EV_SW = 0x05
+_SW_TABLET_MODE = 0x01
+
+
+def _ioc_read(typ, nr, size):
+    return (2 << 30) | (size << 16) | (ord(typ) << 8) | nr
+
+
+def _is_gz302():
+    try:
+        with open("/sys/class/dmi/id/product_name", encoding="utf-8") as fh:
+            name = fh.read()
+    except OSError:
+        return False
+    return "GZ302" in name or "Flow Z13" in name
+
+
+def external_display_connected():
+    try:
+        names = os.listdir("/sys/class/drm")
+    except OSError:
+        return False
+    for name in names:
+        lower = name.lower()
+        if "edp" in lower or "writeback" in lower:
+            continue
+        if not any(tag in lower for tag in ("hdmi", "dp-", "displayport", "dvi")):
+            continue
+        path = os.path.join("/sys/class/drm", name, "status")
+        try:
+            with open(path, encoding="ascii") as fh:
+                if fh.read().strip() == "connected":
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def usb_dock_keyboard_present():
+    try:
+        names = os.listdir("/sys/bus/usb/devices")
+    except OSError:
+        return False
+    for name in names:
+        base = os.path.join("/sys/bus/usb/devices", name)
+        try:
+            with open(os.path.join(base, "idVendor"), encoding="ascii") as fh:
+                vid = fh.read().strip()
+            with open(os.path.join(base, "idProduct"), encoding="ascii") as fh:
+                pid = fh.read().strip()
+        except OSError:
+            continue
+        if vid == _TABLET_KBD_VID and pid == _TABLET_KBD_PID:
+            return True
+    return False
+
+
+def _sw_tablet_mode():
+    eviocgname = _ioc_read("E", 0x06, 256)
+    eviocgbit0 = _ioc_read("E", 0x20, 8)
+    eviocgbitsw = _ioc_read("E", 0x20 + _EV_SW, 16)
+    eviocgsw = _ioc_read("E", 0x1b, 16)
+    found = None
+    for path in glob.glob("/dev/input/event*"):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            continue
+        try:
+            namebuf = array.array("B", [0] * 256)
+            try:
+                fcntl.ioctl(fd, eviocgname, namebuf)
+            except OSError:
+                continue
+            name = bytes(namebuf).split(b"\x00", 1)[0].decode("utf-8", "replace")
+            evbits = array.array("B", [0] * 8)
+            try:
+                fcntl.ioctl(fd, eviocgbit0, evbits)
+            except OSError:
+                continue
+            if not (evbits[0] & (1 << _EV_SW)):
+                continue
+            swbits = array.array("B", [0] * 16)
+            try:
+                fcntl.ioctl(fd, eviocgbitsw, swbits)
+            except OSError:
+                continue
+            byte, bit = divmod(_SW_TABLET_MODE, 8)
+            if byte >= len(swbits) or not (swbits[byte] & (1 << bit)):
+                continue
+            swstate = array.array("B", [0] * 16)
+            try:
+                fcntl.ioctl(fd, eviocgsw, swstate)
+            except OSError:
+                continue
+            val = bool(swstate[byte] & (1 << bit))
+            if "asus" in name.lower() or "wmi" in name.lower():
+                return val
+            found = val
+        finally:
+            os.close(fd)
+    return found
+
+
+def read_tablet():
+    """Handheld tablet Quiet. TV/HDMI dock keeps high power."""
+    if not _is_gz302():
+        return False
+    sw = _sw_tablet_mode()
+    kbd = usb_dock_keyboard_present()
+    posed = (sw is True) or (not kbd)
+    if not posed:
+        return False
+    if external_display_connected():
+        return False
+    return True
+
 
 try:
     from dbus_next import (DBusError, Message, MessageType, PropertyAccess,
@@ -144,7 +271,7 @@ CONFIG_TEMPLATE = """\
 #  z13-power — ROG Flow Z13 power profile configuration
 #  Read by the z13-power-service tray app. Editing takes effect within ~30s
 #  (no restart needed). Edit on_ac / on_battery / on_low_battery / low_battery
-#  from the settings window (Profiles tab); per-mode recipes via "Open config file…".
+#  / tablet_quiet from the settings window (Profiles tab) or this file.
 #
 #  Modes: performance | balanced | silent | max | lowpower
 #  Firmware profiles: quiet | balanced | performance
@@ -172,6 +299,12 @@ low_battery = 15
 on_ac = performance
 on_battery = balanced
 on_low_battery = silent
+
+# Handheld tablet (GZ302): hinge tablet-mode or dock keyboard off, and
+# no HDMI/USB-C display. Quiet. Keyboard-off while a TV is connected
+# does NOT latch Quiet. Set false to ignore posture.
+tablet_quiet = true
+on_tablet = silent
 
 # -----------------------------------------------------------------------------
 #  [modes.<name>] — what the service runs for each profile mode.
@@ -416,8 +549,8 @@ def _omarchy_send():
 def notify(summary, body, *, important=False, why="user", glyph=None):
     # Omarchy flyout already confirms clicks. Toast only power-source
     # transitions there (plug/unplug, low battery). Errors always get through.
-    # why: user | power | external
-    if not important and _omarchy_power_panel_owns_ui() and why != "power":
+    # why: user | power | tablet | external
+    if not important and _omarchy_power_panel_owns_ui() and why not in ("power", "tablet"):
         return
     if _notify_omarchy(summary, body, important=important, glyph=glyph):
         return
@@ -575,18 +708,27 @@ def load_config(force=False):
     cfg = configparser.ConfigParser()
     cfg.read(CONFIG_PATH)
     out = {"low_battery": 15, "on_ac": "performance",
-           "on_battery": "balanced", "on_low_battery": "silent", "modes": {}}
+           "on_battery": "balanced", "on_low_battery": "silent",
+           "tablet_quiet": True, "on_tablet": "silent", "modes": {}}
     try:
         out["low_battery"] = int(cfg.get("service", "low_battery"))
     except (configparser.Error, ValueError):
         pass
-    for key in ("on_ac", "on_battery", "on_low_battery"):
+    for key in ("on_ac", "on_battery", "on_low_battery", "on_tablet"):
         try:
             value = cfg.get("service", key).strip()
             if value in MODES:
                 out[key] = value
         except configparser.Error:
             pass
+    try:
+        raw = cfg.get("service", "tablet_quiet").strip().lower()
+        if raw in ("0", "false", "no", "off"):
+            out["tablet_quiet"] = False
+        elif raw in ("1", "true", "yes", "on"):
+            out["tablet_quiet"] = True
+    except configparser.Error:
+        pass
     for section in cfg.sections():
         if not section.startswith("modes."):
             continue
@@ -1125,6 +1267,45 @@ class PowerMonitor(QThread):
                 self.event.emit()
 
 
+class TabletMonitor(QThread):
+    """USB dock keyboard add/remove (0b05:1a30)."""
+
+    event = pyqtSignal()
+
+    def run(self):
+        try:
+            ctx = pyudev.Context()
+            monitor = pyudev.Monitor.from_netlink(ctx)
+            monitor.filter_by(subsystem="usb")
+        except Exception:
+            return
+        for device in monitor:
+            vid = b""
+            try:
+                raw = device.attributes.get("idVendor")
+                vid = raw if isinstance(raw, (bytes, bytearray)) else b""
+            except Exception:
+                vid = b""
+            if vid == b"0b05":
+                self.event.emit()
+
+
+class DisplayMonitor(QThread):
+    """DRM connector changes (HDMI / USB-C TV dock)."""
+
+    event = pyqtSignal()
+
+    def run(self):
+        try:
+            ctx = pyudev.Context()
+            monitor = pyudev.Monitor.from_netlink(ctx)
+            monitor.filter_by(subsystem="drm")
+        except Exception:
+            return
+        for _device in monitor:
+            self.event.emit()
+
+
 if _DBUS_NEXT_OK:
 
     class _ItemInterface(ServiceInterface):
@@ -1540,6 +1721,13 @@ class Service:
         self.manual_mode = None
         self.locked = False
         self.low_latched = False
+        self._tablet = False
+        self.tablet_latched = False
+        self.tablet_overridden = False
+        self._pending_tablet = None
+        self._tablet_confirm_timer = QTimer()
+        self._tablet_confirm_timer.setSingleShot(True)
+        self._tablet_confirm_timer.timeout.connect(self._confirm_tablet)
         ac, _ = read_power()
         self.last_ac = ac
         self._pending_ac = None
@@ -1640,6 +1828,16 @@ class Service:
         self.monitor.event.connect(self.on_power_event)
         self.monitor.start()
 
+        self.tablet_mon = TabletMonitor()
+        self.tablet_mon.event.connect(self.on_tablet_event)
+        self.tablet_mon.start()
+        self.display_mon = DisplayMonitor()
+        self.display_mon.event.connect(self.on_tablet_event)
+        self.display_mon.start()
+        self.tablet_timer = QTimer()
+        self.tablet_timer.timeout.connect(self.on_tablet_event)
+        self.tablet_timer.start(2000)
+
         self._gui_toggle_at = 0.0
         self.button_watch = ButtonWatcher()
         self.button_watch.pressed.connect(self.toggle_settings)
@@ -1677,6 +1875,7 @@ class Service:
             self.sni.set_state(self.automatic, self.manual_mode, self.locked)
 
     def start(self):
+        self._tablet = read_tablet()
         self.evaluate_power()
         apply_saved_lighting()
         apply_saved_charge_limit()
@@ -1867,6 +2066,9 @@ class Service:
 
     def manual(self, mode):
         """User picked a mode from the tray menu."""
+        if self._tablet:
+            self.tablet_overridden = True
+            self.tablet_latched = False
         self.automatic = False
         self.manual_mode = mode
         if self.sni is not None:
@@ -1878,6 +2080,8 @@ class Service:
 
     def choose_automatic(self):
         """Return to Automatic (service decides from power state)."""
+        if self._tablet and self.cfg.get("tablet_quiet", True):
+            self.tablet_overridden = False
         self.set_automatic(announce=True)
         self.evaluate_power()
 
@@ -1904,6 +2108,42 @@ class Service:
         self.update_tray()
 
     def on_power_event(self):
+        self.evaluate_power()
+
+    def on_tablet_event(self):
+        if not self.cfg.get("tablet_quiet", True):
+            if self.tablet_latched or self._tablet:
+                self._tablet = False
+                self.tablet_latched = False
+                self.tablet_overridden = False
+                self.evaluate_power()
+            return
+        now = read_tablet()
+        if now == self._tablet and self._pending_tablet is None:
+            return
+        self._pending_tablet = now
+        if not self._tablet_confirm_timer.isActive():
+            self._tablet_confirm_timer.start(250)
+
+    def _confirm_tablet(self):
+        now = read_tablet()
+        want = self._pending_tablet
+        self._pending_tablet = None
+        if now != want:
+            return
+        if now == self._tablet:
+            return
+        self._tablet = now
+        if now:
+            self.tablet_overridden = False
+            self.tablet_latched = True
+            self.cfg = load_config()
+            mode = self.cfg.get("on_tablet") or "silent"
+            self.apply(mode, force=True, why="tablet")
+            return
+        self.tablet_latched = False
+        self.tablet_overridden = False
+        self.set_automatic(announce=True)
         self.evaluate_power()
 
     def evaluate_power(self):
@@ -1949,6 +2189,18 @@ class Service:
             if not self.automatic:
                 self.apply(self.manual_mode, why=why)  # restore locked/manual pick
                 return
+        if (self.cfg.get("tablet_quiet", True) and self._tablet
+                and not self.tablet_overridden):
+            newly = not self.tablet_latched
+            self.tablet_latched = True
+            mode = self.cfg.get("on_tablet") or "silent"
+            self.apply(mode, why="tablet" if newly else why)
+            return
+        if self.tablet_latched and not self._tablet:
+            self.tablet_latched = False
+            self.tablet_overridden = False
+            self.set_automatic(refresh=False)
+            why = "tablet"
         if self.automatic:
             mode = self.cfg["on_ac"] if ac else self.cfg["on_battery"]
             if mode != self._last_applied:
@@ -1987,13 +2239,15 @@ class Service:
         self._last_applied = mode
         self.update_menu_checks()
         self.update_tray()
-        if why == "power" or force or mode != self._last_notified:
+        if why in ("power", "tablet") or force or mode != self._last_notified:
             self._announce(mode, why)
         else:
             self._last_notified = mode
         return True
 
     def _source_phrase(self):
+        if self._tablet:
+            return "tablet"
         ac, capacity = read_power()
         if ac:
             return "AC"
@@ -2043,7 +2297,14 @@ class Service:
     def update_tray(self):
         mode = self._ui_mode()
         color = MODE_COLORS.get(mode, "#b9b9c4")
-        state = "automatic" if self.automatic else ("locked" if self.locked else "manual")
+        if self._tablet and not self.tablet_overridden:
+            state = "tablet"
+        elif self.automatic:
+            state = "automatic"
+        elif self.locked:
+            state = "locked"
+        else:
+            state = "manual"
         label = MODES.get(mode, mode)
         self.write_status(mode)
         tip = f"z13-power: {label} ({state})"
@@ -2105,6 +2366,7 @@ class Service:
             "profile": self.last_profile or self.last_fw_profile or "",
             "charge_limit": limit,
             "fill_once": bool(fill_once),
+            "tablet": bool(self._tablet),
         }
         if payload == self._status_payload:
             return

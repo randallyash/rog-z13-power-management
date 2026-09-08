@@ -32,7 +32,8 @@ Column {
     tdp: null,
     profile: "",
     fill_once: false,
-    charge_limit: null
+    charge_limit: null,
+    tablet: false
   })
 
   // QML/JS only accepts \\uXXXX (4 hex digits). Nerd Font glyphs live
@@ -67,7 +68,8 @@ Column {
   readonly property var capacity: status.capacity
   readonly property string tdpLabel: status.tdp !== undefined && status.tdp !== null && status.tdp !== ""
     ? String(status.tdp) + "W" : "—"
-  readonly property string heroMeta: automatic ? "Automatic" : (locked ? "Locked" : "Manual")
+  readonly property bool tablet: status.tablet === true
+  readonly property string heroMeta: tablet ? "Tablet" : (automatic ? "Automatic" : (locked ? "Locked" : "Manual"))
   readonly property string sourceValue: onAc ? "AC" : (capacity !== null && capacity !== undefined ? "Battery" : "—")
   readonly property string batteryValue: capacity !== null && capacity !== undefined ? String(capacity) + "%" : "—"
 
