@@ -21,6 +21,14 @@ This is for every **2025 GZ302** on Linux.
 
 ---
 
+## Custom TDP
+
+Max is gone as a named pill. **Custom** is a 5–93 W slider (default 75).
+`z13-power max` still means 93 W on the CLI. Overlay has Custom, no slider.
+Marketplace v1.1.4 pin hashes are unchanged.
+
+---
+
 ## Tablet Quiet
 
 Handheld tablet — Asus WMI `SW_TABLET_MODE` or the dock keyboard gone,

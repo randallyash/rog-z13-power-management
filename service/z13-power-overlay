@@ -32,7 +32,7 @@ STATUS_PATH = os.path.join(STATE_DIR, "status.json")
 COMMAND_PATH = os.path.join(STATE_DIR, "command.json")
 
 MODES = [
-    ("max", "Max"),
+    ("custom", "Custom"),
     ("performance", "Perf"),
     ("balanced", "Mid"),
     ("silent", "Quiet"),

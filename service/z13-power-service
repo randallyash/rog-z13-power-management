@@ -214,6 +214,66 @@ def read_tablet():
     return True
 
 
+CUSTOM_TDP_MIN, CUSTOM_TDP_MAX, CUSTOM_TDP_DEFAULT = 5, 93, 75
+
+
+def clamp_custom_tdp(watts):
+    try:
+        n = int(watts)
+    except (TypeError, ValueError):
+        return CUSTOM_TDP_DEFAULT
+    return max(CUSTOM_TDP_MIN, min(CUSTOM_TDP_MAX, n))
+
+
+def load_custom_tdp():
+    cfg = configparser.ConfigParser()
+    try:
+        cfg.read(TWEAKS_PATH)
+        raw = cfg.get("tweaks", "custom_tdp").strip()
+    except (configparser.Error, OSError):
+        return CUSTOM_TDP_DEFAULT
+    return clamp_custom_tdp(raw)
+
+
+def save_custom_tdp(watts):
+    watts = clamp_custom_tdp(watts)
+    cfg = configparser.ConfigParser()
+    try:
+        cfg.read(TWEAKS_PATH)
+    except OSError:
+        pass
+    if not cfg.has_section("tweaks"):
+        cfg.add_section("tweaks")
+    cfg.set("tweaks", "custom_tdp", str(watts))
+    os.makedirs(os.path.dirname(TWEAKS_PATH), exist_ok=True)
+    with open(TWEAKS_PATH, "w") as fh:
+        cfg.write(fh)
+    return watts
+
+
+def custom_mode_def(watts):
+    w = clamp_custom_tdp(watts)
+    if w <= 5:
+        return {
+            "profile": "quiet", "tdp": "5", "tdp_force": "false",
+            "fancurve": "reset", "undervolt": "reset",
+        }
+    if w < 75:
+        return {
+            "profile": "balanced", "tdp": f"{w} {w} {w}",
+            "tdp_force": "false", "fancurve": "reset", "undervolt": "reset",
+        }
+    md = {
+        "profile": "performance",
+        "tdp": str(w) if w > 75 else f"{w} {w} {w}",
+        "tdp_force": "true" if w > 75 else "false",
+        "undervolt": "reset",
+    }
+    if w <= 75:
+        md["fancurve"] = "reset"
+    return md
+
+
 try:
     from dbus_next import (DBusError, Message, MessageType, PropertyAccess,
                            Variant)
@@ -231,11 +291,13 @@ MODES = {
     "performance": "Performance",
     "balanced": "Balanced",
     "silent": "Quiet",
-    "max": "Max",
+    "custom": "Custom",
+    "max": "Custom",
     "lowpower": "Low power",
 }
-MODE_ORDER = ["max", "performance", "balanced", "silent", "lowpower"]
+MODE_ORDER = ["custom", "performance", "balanced", "silent", "lowpower"]
 MODE_GLYPHS = {
+    "custom": "\uf0e7",
     "max": "\uf0e7",
     "performance": "\U000f04c5",
     "balanced": "\U000f04ba",
@@ -248,6 +310,7 @@ MODE_COLORS = {
     "performance": "#ff3131",
     "balanced": "#2ec4ff",
     "silent": "#3ddc6f",
+    "custom": "#ff8c00",
     "max": "#ff8c00",
     "lowpower": "#ffd23f",
 }
@@ -260,6 +323,8 @@ DEFAULT_MODES = {
     # Firmware "quiet" pins SMU ~40W and ignores PPT. Balanced + hard 20W.
     "silent": {"profile": "balanced", "tdp": "20 20 20",
                "tdp_force": "false", "fancurve": "reset", "undervolt": "-20"},
+    "custom": {"profile": "performance", "tdp": "75 75 75",
+               "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
     "max": {"profile": "performance", "tdp": "93",
             "tdp_force": "true", "undervolt": "reset"},
     "lowpower": {"profile": "quiet", "tdp": "5",
@@ -2229,7 +2294,10 @@ class Service:
 
     def apply(self, mode, force=False, why="user"):
         """Apply a mode; notify only when it actually changed (or force)."""
-        mode_def = self.cfg["modes"].get(mode) or DEFAULT_MODES[mode]
+        if mode == "custom":
+            mode_def = custom_mode_def(load_custom_tdp())
+        else:
+            mode_def = self.cfg["modes"].get(mode) or DEFAULT_MODES[mode]
         if not apply_mode(mode_def, force=force):
             notify("Power profile error", f"Failed to apply '{mode}'",
                    important=True, glyph="\U000f0026")
@@ -2329,6 +2397,8 @@ class Service:
             self.tray.show()
 
     def _mode_pl1(self, mode):
+        if mode == "custom":
+            return load_custom_tdp()
         mode_def = self.cfg["modes"].get(mode) or DEFAULT_MODES.get(mode) or {}
         parts = str(mode_def.get("tdp", "")).split()
         if parts and parts[0].lstrip("-").isdigit():
@@ -2345,6 +2415,9 @@ class Service:
         if data.get("automatic") is not False:
             return
         mode = data.get("mode")
+        if mode == "max":
+            save_custom_tdp(93)
+            mode = "custom"
         if mode not in MODE_ORDER:
             return
         self.automatic = False
@@ -2367,6 +2440,7 @@ class Service:
             "charge_limit": limit,
             "fill_once": bool(fill_once),
             "tablet": bool(self._tablet),
+            "custom_tdp": load_custom_tdp(),
         }
         if payload == self._status_payload:
             return
@@ -2419,6 +2493,11 @@ class Service:
         op = str(data.get("op") or "")
         if op == "mode":
             mode = str(data.get("mode") or "")
+            if mode == "max":
+                save_custom_tdp(93)
+                mode = "custom"
+            if mode == "custom" and data.get("tdp") is not None:
+                save_custom_tdp(data.get("tdp"))
             if mode in MODE_ORDER:
                 self.manual(mode)
         elif op == "automatic":
