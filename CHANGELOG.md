@@ -37,6 +37,16 @@ Packagers: ship `service/z13_power_io.py` next to `z13_power_common.py`.
 
 ---
 
+## Tablet Quiet
+
+Keyboard off (USB dock `0b05:1a30` gone) or Asus WMI `SW_TABLET_MODE`
+latches **Quiet**, same recipe as low-battery. Keyboard back or hinge
+laptop → **Automatic**. A manual pick while it is a tablet sticks until
+the keyboard returns. `tablet_quiet = false` in `service.conf` disables
+it. The flyout hero reads **TABLET**. Not a GZ302: no-op.
+
+---
+
 ## One runtime
 
 Settings, Diagnose, the tray, and `z13-power settings` now launch the

@@ -4,7 +4,10 @@
 # Loaded from beside the script, /usr/share/z13-power-management, or
 # ~/.local/bin — same lookup as z13_power_theme.py.
 
+import array
 import configparser
+import fcntl
+import glob
 import io
 import os
 import sys
@@ -32,6 +35,112 @@ FILL_DONE_CAPACITY = 99
 
 _ac_online_path = None
 _bat_capacity_path = None
+
+
+# Flow Z13 dock keyboard (GZ302EA-Keyboard).
+_TABLET_KBD_VID = "0b05"
+_TABLET_KBD_PID = "1a30"
+# Linux input.h: EV_SW, SW_TABLET_MODE
+_EV_SW = 0x05
+_SW_TABLET_MODE = 0x01
+
+
+def _ioc_read(typ, nr, size):
+    return (2 << 30) | (size << 16) | (ord(typ) << 8) | nr
+
+
+def _is_gz302():
+    try:
+        with open("/sys/class/dmi/id/product_name", encoding="utf-8") as fh:
+            name = fh.read()
+    except OSError:
+        return False
+    return "GZ302" in name or "Flow Z13" in name
+
+
+def usb_dock_keyboard_present():
+    """True if the ASUS GZ302 dock keyboard (0b05:1a30) is enumerated."""
+    try:
+        names = os.listdir("/sys/bus/usb/devices")
+    except OSError:
+        return False
+    for name in names:
+        base = os.path.join("/sys/bus/usb/devices", name)
+        try:
+            with open(os.path.join(base, "idVendor"), encoding="ascii") as fh:
+                vid = fh.read().strip()
+            with open(os.path.join(base, "idProduct"), encoding="ascii") as fh:
+                pid = fh.read().strip()
+        except OSError:
+            continue
+        if vid == _TABLET_KBD_VID and pid == _TABLET_KBD_PID:
+            return True
+    return False
+
+
+def _sw_tablet_mode():
+    """SW_TABLET_MODE on Asus WMI (True tablet, False laptop, None unknown)."""
+    eviocgname = _ioc_read("E", 0x06, 256)
+    eviocgbit0 = _ioc_read("E", 0x20, 8)
+    eviocgbitsw = _ioc_read("E", 0x20 + _EV_SW, 16)
+    eviocgsw = _ioc_read("E", 0x1b, 16)
+    found = None
+    for path in glob.glob("/dev/input/event*"):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            continue
+        try:
+            namebuf = array.array("B", [0] * 256)
+            try:
+                fcntl.ioctl(fd, eviocgname, namebuf)
+            except OSError:
+                continue
+            name = bytes(namebuf).split(b"\x00", 1)[0].decode("utf-8", "replace")
+            evbits = array.array("B", [0] * 8)
+            try:
+                fcntl.ioctl(fd, eviocgbit0, evbits)
+            except OSError:
+                continue
+            if not (evbits[0] & (1 << _EV_SW)):
+                continue
+            swbits = array.array("B", [0] * 16)
+            try:
+                fcntl.ioctl(fd, eviocgbitsw, swbits)
+            except OSError:
+                continue
+            byte, bit = divmod(_SW_TABLET_MODE, 8)
+            if byte >= len(swbits) or not (swbits[byte] & (1 << bit)):
+                continue
+            swstate = array.array("B", [0] * 16)
+            try:
+                fcntl.ioctl(fd, eviocgsw, swstate)
+            except OSError:
+                continue
+            val = bool(swstate[byte] & (1 << bit))
+            # Prefer the Asus WMI switch when several devices exist.
+            if "asus" in name.lower() or "wmi" in name.lower():
+                return val
+            found = val
+        finally:
+            os.close(fd)
+    return found
+
+
+def read_tablet():
+    """True when the GZ302 is a tablet (hinge tablet-mode or dock keyboard off).
+
+    Other machines return False. Does not consume evdev events (ioctl only),
+    so the compositor still sees SW_TABLET_MODE for rotation.
+    """
+    if not _is_gz302():
+        return False
+    sw = _sw_tablet_mode()
+    if sw is True:
+        return True
+    if not usb_dock_keyboard_present():
+        return True
+    return False
 
 
 def runtime_dir():

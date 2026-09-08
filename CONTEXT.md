@@ -106,6 +106,11 @@ clears on a live AC/battery change.
 - **Low battery** (capacity <= `low_battery`): latches the configured
   `on_low_battery` profile EVEN over a locked/manual pick; restores the locked
   pick when back above the threshold.
+- **Tablet / keyboard-off** (GZ302): Asus WMI `SW_TABLET_MODE` or missing
+  USB dock keyboard `0b05:1a30` latches `on_tablet` (default silent/Quiet),
+  even over Automatic. Keyboard back or hinge laptop → Automatic.
+  Manual pick while tablet sticks until the dock returns. `tablet_quiet=false`
+  disables. ioctl EVIOCGSW only — do not read evdev (would steal rotation).
 - **Mode definitions**: `~/.config/z13-power/service.conf` `[modes.<name>]`
   sections — `profile`, `tdp` ("A" or "A B C" → `--set A [--pl2 B --pl3 C]`),
   `tdp_force` (adds `--force`), `fancurve` (`reset`/`auto` → `--reset`,

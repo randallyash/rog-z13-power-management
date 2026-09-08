@@ -285,6 +285,24 @@ diagnose() {
     printf '[WARN] notify-send: not found — install libnotify for popups\n'
     warns=$((warns+1))
   fi
+  if python3 - <<'PY'
+import os, sys
+for d in ("/usr/share/z13-power-management", os.path.expanduser("~/.local/bin")):
+    if os.path.isfile(os.path.join(d, "z13_power_common.py")):
+        sys.path.insert(0, d)
+        break
+from z13_power_common import read_tablet, usb_dock_keyboard_present
+t = read_tablet()
+kbd = usb_dock_keyboard_present()
+print("[ OK ] tablet: %s (dock keyboard %s)" % (
+    "Quiet latch" if t else "laptop", "present" if kbd else "absent"))
+PY
+  then
+    :
+  else
+    printf '[WARN] tablet: could not read posture (need z13_power_common.py)\n'
+    warns=$((warns+1))
+  fi
   if command -v z13ctl >/dev/null 2>&1; then
     local as
     as="$(z13ctl autoswitch --get 2>/dev/null || true)"
