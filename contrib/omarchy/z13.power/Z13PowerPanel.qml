@@ -32,7 +32,9 @@ Column {
     tdp: null,
     profile: "",
     fill_once: false,
-    charge_limit: null
+    charge_limit: null,
+    tablet: false,
+    custom_tdp: 75
   })
 
   // QML/JS only accepts \\uXXXX (4 hex digits). Nerd Font glyphs live
@@ -40,7 +42,7 @@ Column {
   function glyph(cp) { return String.fromCodePoint(cp) }
 
   readonly property var modes: [
-    { id: "max", label: "Max", icon: glyph(0xF0E7) },
+    { id: "custom", label: "Custom", icon: glyph(0xF0E7) },
     { id: "performance", label: "Perf", icon: glyph(0xF04C5) },
     { id: "balanced", label: "Mid", icon: glyph(0xF04BA) },
     { id: "silent", label: "Quiet", icon: glyph(0xF0594) },
@@ -67,7 +69,8 @@ Column {
   readonly property var capacity: status.capacity
   readonly property string tdpLabel: status.tdp !== undefined && status.tdp !== null && status.tdp !== ""
     ? String(status.tdp) + "W" : "—"
-  readonly property string heroMeta: automatic ? "Automatic" : (locked ? "Locked" : "Manual")
+  readonly property bool tablet: status.tablet === true
+  readonly property string heroMeta: tablet ? "Tablet" : (automatic ? "Automatic" : (locked ? "Locked" : "Manual"))
   readonly property string sourceValue: onAc ? "AC" : (capacity !== null && capacity !== undefined ? "Battery" : "—")
   readonly property string batteryValue: capacity !== null && capacity !== undefined ? String(capacity) + "%" : "—"
 
@@ -101,8 +104,20 @@ Column {
     cmdProc.running = true
   }
 
+  readonly property int customTdp: {
+    var n = Number(status.custom_tdp)
+    if (!isFinite(n)) return 75
+    if (n < 5) return 5
+    if (n > 93) return 93
+    return Math.round(n)
+  }
+
   function setMode(mode) {
     send("mode", { mode: mode })
+  }
+
+  function setCustomTdp(watts) {
+    send("mode", { mode: "custom", tdp: Math.round(watts) })
   }
 
   function toggleAutomatic() {
@@ -365,6 +380,48 @@ Column {
           onClicked: root.setMode(modelData.id)
         }
       }
+    }
+  }
+
+  Column {
+    visible: root.activeMode === "custom"
+    width: parent.width
+    spacing: Style.space(6)
+
+    Item {
+      width: parent.width
+      height: Math.max(customTdpHeader.implicitHeight, customTdpLabel.implicitHeight)
+
+      PanelSectionHeader {
+        id: customTdpHeader
+        text: "CUSTOM TDP"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        anchors.left: parent.left
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        id: customTdpLabel
+        text: Math.round(customTdpSlider.dragging ? customTdpSlider.liveValue : root.customTdp) + "W"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+      }
+    }
+
+    PanelSlider {
+      id: customTdpSlider
+      bar: root.bar
+      width: parent.width
+      minimum: 5
+      maximum: 93
+      step: 1
+      integer: true
+      value: root.customTdp
+      onReleased: function(v) { root.setCustomTdp(v) }
     }
   }
 

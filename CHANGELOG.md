@@ -37,6 +37,38 @@ Packagers: ship `service/z13_power_io.py` next to `z13_power_common.py`.
 
 ---
 
+## Custom TDP
+
+Max is gone as a named pill. **Custom** is a 5–93 W slider (Low through
+old Max), default 75 W. Stored in `tweaks.conf` as `custom_tdp`. In-game
+overlay has the Custom button, no slider. `z13-power max` still means
+93 W. Above 75 W uses `--force` so PL1 actually binds.
+
+---
+
+## Tablet Quiet
+
+Handheld tablet — Asus WMI `SW_TABLET_MODE` or the dock keyboard
+(`0b05:1a30`) gone, **and no external display** — latches **Quiet**.
+Keyboard-off while HDMI / USB-C is driving a TV keeps current power
+(Automatic / Max). Unplug the TV or attach the keyboard and it
+re-evaluates. A manual pick while latched sticks until posture changes.
+`tablet_quiet = false` disables it. The flyout hero reads **TABLET**.
+Not a GZ302: no-op.
+
+---
+
+## One runtime
+
+Settings, Diagnose, the tray, and `z13-power settings` now launch the
+**same** prefix: the directory that holds `z13-power-settings` next to
+`z13_power_common.py`. Packaged `/usr/share` wins when the CLI is the
+`/usr/bin` symlink. `install.sh` no longer copies only the CLI into a
+packaged prefix (that is how lottery vanished after reboot: flyout opened
+`/usr/share` Settings from August, tray ran `~/.local`).
+
+---
+
 ## Omarchy — the battery widget *is* z13-power
 
 Install no longer leaves a stray bolt next to the battery. 

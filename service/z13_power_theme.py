@@ -60,7 +60,8 @@ FALLBACK = {
 }
 
 MODE_GLYPHS = {
-    "max": "\uf0e7",           # bolt
+    "custom": "\uf0e7",        # bolt
+    "max": "\uf0e7",           # bolt (legacy)
     "performance": "\U000f04c5",  # nf-md-speedometer
     "balanced": "\U000f04ba",     # nf-md-scale-balance
     "silent": "\U000f0594",       # nf-md-weather-night (quiet, not mute)
@@ -290,6 +291,7 @@ def mode_colors(theme=None):
         "performance": t["red"],
         "balanced": t["cyan"],
         "silent": t["green"],
+        "custom": t["orange"],
         "max": t["orange"],
         "lowpower": t["yellow"],
     }

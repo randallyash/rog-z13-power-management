@@ -4,7 +4,10 @@
 # Loaded from beside the script, /usr/share/z13-power-management, or
 # ~/.local/bin — same lookup as z13_power_theme.py.
 
+import array
 import configparser
+import fcntl
+import glob
 import io
 import os
 import sys
@@ -24,6 +27,9 @@ CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
 BATTERY_PATH = os.path.expanduser("~/.config/z13-power/battery.conf")
 TWEAKS_PATH = os.path.expanduser("~/.config/z13-power/tweaks.conf")
+CUSTOM_TDP_MIN = 5
+CUSTOM_TDP_MAX = 93
+CUSTOM_TDP_DEFAULT = 75
 CHARGE_LIMIT_PATH = "/sys/class/power_supply/BAT0/charge_control_end_threshold"
 STATE_DIR = os.path.expanduser("~/.local/state/z13-power")
 STATUS_PATH = os.path.join(STATE_DIR, "status.json")
@@ -32,6 +38,234 @@ FILL_DONE_CAPACITY = 99
 
 _ac_online_path = None
 _bat_capacity_path = None
+
+
+# Flow Z13 dock keyboard (GZ302EA-Keyboard).
+_TABLET_KBD_VID = "0b05"
+_TABLET_KBD_PID = "1a30"
+# Linux input.h: EV_SW, SW_TABLET_MODE
+_EV_SW = 0x05
+_SW_TABLET_MODE = 0x01
+
+
+def _ioc_read(typ, nr, size):
+    return (2 << 30) | (size << 16) | (ord(typ) << 8) | nr
+
+
+def _is_gz302():
+    try:
+        with open("/sys/class/dmi/id/product_name", encoding="utf-8") as fh:
+            name = fh.read()
+    except OSError:
+        return False
+    return "GZ302" in name or "Flow Z13" in name
+
+
+def external_display_connected():
+    """True when an external DRM sink is connected (HDMI / USB-C DP). eDP ignored."""
+    try:
+        names = os.listdir("/sys/class/drm")
+    except OSError:
+        return False
+    for name in names:
+        lower = name.lower()
+        if "edp" in lower or "writeback" in lower:
+            continue
+        if not any(tag in lower for tag in ("hdmi", "dp-", "displayport", "dvi")):
+            continue
+        path = os.path.join("/sys/class/drm", name, "status")
+        try:
+            with open(path, encoding="ascii") as fh:
+                if fh.read().strip() == "connected":
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def usb_dock_keyboard_present():
+    """True if the ASUS GZ302 dock keyboard (0b05:1a30) is enumerated."""
+    try:
+        names = os.listdir("/sys/bus/usb/devices")
+    except OSError:
+        return False
+    for name in names:
+        base = os.path.join("/sys/bus/usb/devices", name)
+        try:
+            with open(os.path.join(base, "idVendor"), encoding="ascii") as fh:
+                vid = fh.read().strip()
+            with open(os.path.join(base, "idProduct"), encoding="ascii") as fh:
+                pid = fh.read().strip()
+        except OSError:
+            continue
+        if vid == _TABLET_KBD_VID and pid == _TABLET_KBD_PID:
+            return True
+    return False
+
+
+def _sw_tablet_mode():
+    """SW_TABLET_MODE on Asus WMI (True tablet, False laptop, None unknown)."""
+    eviocgname = _ioc_read("E", 0x06, 256)
+    eviocgbit0 = _ioc_read("E", 0x20, 8)
+    eviocgbitsw = _ioc_read("E", 0x20 + _EV_SW, 16)
+    eviocgsw = _ioc_read("E", 0x1b, 16)
+    found = None
+    for path in glob.glob("/dev/input/event*"):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            continue
+        try:
+            namebuf = array.array("B", [0] * 256)
+            try:
+                fcntl.ioctl(fd, eviocgname, namebuf)
+            except OSError:
+                continue
+            name = bytes(namebuf).split(b"\x00", 1)[0].decode("utf-8", "replace")
+            evbits = array.array("B", [0] * 8)
+            try:
+                fcntl.ioctl(fd, eviocgbit0, evbits)
+            except OSError:
+                continue
+            if not (evbits[0] & (1 << _EV_SW)):
+                continue
+            swbits = array.array("B", [0] * 16)
+            try:
+                fcntl.ioctl(fd, eviocgbitsw, swbits)
+            except OSError:
+                continue
+            byte, bit = divmod(_SW_TABLET_MODE, 8)
+            if byte >= len(swbits) or not (swbits[byte] & (1 << bit)):
+                continue
+            swstate = array.array("B", [0] * 16)
+            try:
+                fcntl.ioctl(fd, eviocgsw, swstate)
+            except OSError:
+                continue
+            val = bool(swstate[byte] & (1 << bit))
+            # Prefer the Asus WMI switch when several devices exist.
+            if "asus" in name.lower() or "wmi" in name.lower():
+                return val
+            found = val
+        finally:
+            os.close(fd)
+    return found
+
+
+def read_tablet():
+    """True for handheld tablet posture that should latch Quiet.
+
+    Hinge SW_TABLET_MODE or a missing dock keyboard is a tablet *pose*.
+    An external display (TV / USB-C dock) means it is a living-room
+    machine and must keep high power — keyboard-off-to-the-TV is not Quiet.
+    Other machines return False. ioctl-only for SW_TABLET_MODE so the
+    compositor still gets rotation events.
+    """
+    if not _is_gz302():
+        return False
+    sw = _sw_tablet_mode()
+    kbd = usb_dock_keyboard_present()
+    posed = (sw is True) or (not kbd)
+    if not posed:
+        return False
+    if external_display_connected():
+        return False
+    return True
+
+
+def clamp_custom_tdp(watts):
+    try:
+        n = int(watts)
+    except (TypeError, ValueError):
+        return CUSTOM_TDP_DEFAULT
+    return max(CUSTOM_TDP_MIN, min(CUSTOM_TDP_MAX, n))
+
+
+def load_tweaks_conf():
+    """Return the [tweaks] dict (undervolt, custom_tdp, …)."""
+    out = {}
+    text = bounded_text(read_user_file([".config", "z13-power"], "tweaks.conf"))
+    if text is None:
+        return out
+    cfg = configparser.ConfigParser()
+    try:
+        cfg.read_string(text)
+    except (configparser.Error, ValueError):
+        return out
+    if not cfg.has_section("tweaks"):
+        return out
+    for key in cfg.options("tweaks"):
+        out[key] = cfg.get("tweaks", key).strip()
+    return out
+
+
+def save_tweaks_conf(updates):
+    """Merge keys into tweaks.conf without dropping the others."""
+    cur = load_tweaks_conf()
+    cur.update(updates)
+    cfg = configparser.ConfigParser()
+    cfg.add_section("tweaks")
+    for key, val in cur.items():
+        if val is None or val == "":
+            continue
+        cfg.set("tweaks", key, str(val))
+    buf = io.StringIO()
+    cfg.write(buf)
+    try:
+        write_user_file([".config", "z13-power"], "tweaks.conf",
+                        buf.getvalue().encode("utf-8"))
+    except (IoError, OSError):
+        return
+
+
+def load_custom_tdp():
+    raw = load_tweaks_conf().get("custom_tdp")
+    if raw is None or raw == "":
+        return CUSTOM_TDP_DEFAULT
+    return clamp_custom_tdp(raw)
+
+
+def save_custom_tdp(watts):
+    watts = clamp_custom_tdp(watts)
+    if load_custom_tdp() == watts:
+        return watts
+    save_tweaks_conf({"custom_tdp": str(watts)})
+    return watts
+
+
+def custom_mode_def(watts):
+    """Recipe for the Custom pill: PL1=PL2=PL3=watts, 5–93."""
+    w = clamp_custom_tdp(watts)
+    if w <= 5:
+        return {
+            "profile": "quiet", "tdp": "5", "tdp_force": "false",
+            "fancurve": "reset", "undervolt": "reset",
+        }
+    if w < 75:
+        return {
+            "profile": "balanced", "tdp": f"{w} {w} {w}",
+            "tdp_force": "false", "fancurve": "reset", "undervolt": "reset",
+        }
+    md = {
+        "profile": "performance",
+        "tdp": str(w) if w > 75 else f"{w} {w} {w}",
+        "tdp_force": "true" if w > 75 else "false",
+        "undervolt": "reset",
+    }
+    if w <= 75:
+        md["fancurve"] = "reset"
+    return md
+
+
+def runtime_dir():
+    """Directory that holds a complete z13-power runtime (settings + common)."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    for path in (here, "/usr/share/z13-power-management",
+                 os.path.expanduser("~/.local/bin")):
+        if (os.access(os.path.join(path, "z13-power-settings"), os.X_OK)
+                and os.path.isfile(os.path.join(path, "z13_power_common.py"))):
+            return path
+    return None
 
 
 def theme_mod():

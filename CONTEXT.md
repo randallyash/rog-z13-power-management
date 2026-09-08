@@ -36,7 +36,9 @@ Packaged as `z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
   no-ops elsewhere)
 - `kde/powerdevilrc` — display/DPMS-only template (no RunScript hooks; KDE only)
 - `install.sh` — from-source installer (fallback; package is preferred); deploys
-  powerdevilrc only when running KDE Plasma (detected via XDG_CURRENT_DESKTOP)
+  powerdevilrc only when running KDE Plasma (detected via XDG_CURRENT_DESKTOP).
+  Copies the *whole* runtime (CLI, service, settings, overlay, common, io,
+  theme). Never copies only `z13-power` into `/usr/share`.
 - `LICENSE` — GPL-3.0-or-later
 
 ## Mode → z13ctl mapping
@@ -45,7 +47,8 @@ Packaged as `z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
 |------|----------------|
 | balanced | profile balanced; tdp 52/71/70; fancurve reset; undervolt reset |
 | performance | profile performance; tdp 75/75/93/93; fancurve reset; undervolt reset |
-| max | profile performance; tdp 93 --force; undervolt reset |
+| custom | TDP 5–93 from tweaks.conf `custom_tdp` (default 75); `--force` above 75 W |
+| max | alias for custom 93 |
 | silent | profile quiet; tdp 20/40/40; fancurve reset; undervolt -20 |
 | lowpower | profile quiet; tdp 5; fancurve reset; undervolt -25 |
 | status | prints profile/tdp/fancurve/undervolt |
@@ -104,6 +107,13 @@ clears on a live AC/battery change.
 - **Low battery** (capacity <= `low_battery`): latches the configured
   `on_low_battery` profile EVEN over a locked/manual pick; restores the locked
   pick when back above the threshold.
+- **Tablet Quiet** (GZ302): Asus WMI `SW_TABLET_MODE` or missing USB dock
+  keyboard `0b05:1a30` is a tablet *pose*. If an external DRM sink is
+  connected (HDMI / USB-C DP, not eDP), it is a TV/monitor dock and we
+  do **not** latch Quiet. Handheld pose → `on_tablet` (default silent).
+  Leave pose → Automatic. Manual pick while latched sticks until posture
+  changes. `tablet_quiet=false` disables. ioctl EVIOCGSW only — do not
+  read evdev (would steal rotation).
 - **Mode definitions**: `~/.config/z13-power/service.conf` `[modes.<name>]`
   sections — `profile`, `tdp` ("A" or "A B C" → `--set A [--pl2 B --pl3 C]`),
   `tdp_force` (adds `--force`), `fancurve` (`reset`/`auto` → `--reset`,
