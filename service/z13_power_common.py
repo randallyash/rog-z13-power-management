@@ -398,6 +398,27 @@ def _discover_power_paths():
             return
 
 
+def _ucsi_pd_online():
+    """True when a USB-C PD source port reports online.
+
+    The ASUS EC keeps the mains indicator (AC0) offline for generic
+    USB-C PD chargers - power flows but the platform never sees "mains".
+    The ucsi source PSUs are the only signal that the machine is
+    actually plugged in on such chargers.
+    """
+    try:
+        names = os.listdir("/sys/class/power_supply")
+    except OSError:
+        return False
+    for d in names:
+        if not d.startswith("ucsi-source-psy"):
+            continue
+        raw = sys_read(os.path.join("/sys/class/power_supply", d, "online"))
+        if raw == "1":
+            return True
+    return False
+
+
 def read_power():
     """Return (ac_online: bool, capacity: int|None)."""
     global _ac_online_path, _bat_capacity_path
@@ -411,6 +432,9 @@ def read_power():
             _discover_power_paths()
             raw = sys_read(_ac_online_path) if _ac_online_path else None
         ac = raw == "1"
+    if not ac:
+        # Generic USB-C PD chargers: EC mains stays offline, ucsi tells the truth.
+        ac = _ucsi_pd_online()
     if _bat_capacity_path:
         raw = sys_read(_bat_capacity_path)
         if raw is None:
