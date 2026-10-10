@@ -236,6 +236,11 @@ clears on a live AC/battery change.
 
 ## Packaging
 
+- PRIMARY REPO (2026-10-10): `ssh://git@forgejo.fifthdread.com:223/Ramzal/rog-z13-power-management.git`
+  - Ramzal develops here; this (Fifthdread) clone is a mirror. Push code to
+    Ramzal first, then mirror to origin. Both accept pushes (verified).
+  - The `z13-power-git` PKGBUILD in the pkgbuilds repo sources Ramzal's URL
+    (repointed 2026-10-10).
 - PKGBUILD `z13-power-git` in the `pkgbuilds` repo (paru custom source).
 - depends: `z13ctl-bin python-pyqt6 python-pyudev libnotify python-dbus-next
   ryzen_smu-dkms-git`. Undervolt needs a kernel module rebuilt for each
