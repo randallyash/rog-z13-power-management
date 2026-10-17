@@ -10,6 +10,7 @@ import fcntl
 import glob
 import io
 import os
+import re
 import sys
 
 from z13_power_io import (
@@ -27,8 +28,11 @@ CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
 BATTERY_PATH = os.path.expanduser("~/.config/z13-power/battery.conf")
 TWEAKS_PATH = os.path.expanduser("~/.config/z13-power/tweaks.conf")
-CUSTOM_TDP_MIN = 5
-CUSTOM_TDP_MAX = 93
+# asus-armoury firmware-attributes limits (BIOS 314+, z13ctl >= 1.4.0):
+# PL1 28–80W (75 W without --force), PL2 32–92W, PL3 45–93W. The old
+# asus-nb-wmi interface accepted 5–93 W — those presets are gone.
+CUSTOM_TDP_MIN = 28
+CUSTOM_TDP_MAX = 80
 CUSTOM_TDP_DEFAULT = 75
 CHARGE_LIMIT_PATH = "/sys/class/power_supply/BAT0/charge_control_end_threshold"
 STATE_DIR = os.path.expanduser("~/.local/state/z13-power")
@@ -234,27 +238,24 @@ def save_custom_tdp(watts):
 
 
 def custom_mode_def(watts):
-    """Recipe for the Custom pill: PL1=PL2=PL3=watts, 5–93."""
+    """Recipe for the Custom pill: PL1=PL2=PL3=watts, 28–80."""
     w = clamp_custom_tdp(watts)
-    if w <= 5:
-        return {
-            "profile": "quiet", "tdp": "5", "tdp_force": "false",
-            "fancurve": "reset", "undervolt": "reset",
-        }
     if w < 75:
+        # Below the armoury PL2/PL3 minimums z13ctl raises them itself
+        # (e.g. --set 28 writes 28/32/45 W), so a flat triple is fine.
         return {
             "profile": "balanced", "tdp": f"{w} {w} {w}",
             "tdp_force": "false", "fancurve": "reset", "undervolt": "reset",
         }
-    md = {
+    return {
         "profile": "performance",
-        "tdp": str(w) if w > 75 else f"{w} {w} {w}",
+        "tdp": f"{w} 92 93",
         "tdp_force": "true" if w > 75 else "false",
         "undervolt": "reset",
+        # --force installs its own 50% PWM-floor safety curve; only reset
+        # the fan curve when we stay at or below the 75 W no-force cap.
+        **({} if w > 75 else {"fancurve": "reset"}),
     }
-    if w <= 75:
-        md["fancurve"] = "reset"
-    return md
 
 
 def runtime_dir():
@@ -292,6 +293,49 @@ def z13ctl(args, timeout=Z13CTL_TIMEOUT):
 def z13ctl_ok(args, timeout=30):
     r = z13ctl(args, timeout=timeout)
     return r is not None and r.returncode == 0
+
+
+def z13ctl_err(args, timeout=30):
+    """Run z13ctl; return (ok, error text) — the text feeds failure toasts.
+
+    z13ctl's refusal messages ("PL2 93W out of range 32–92W") are the only
+    explanation a user gets when a mode apply fails, so surface the last
+    stderr/stdout line instead of discarding it like z13ctl_ok does.
+    """
+    r = z13ctl(args, timeout=timeout)
+    if r is None:
+        return False, "z13ctl did not run"
+    if r.returncode == 0:
+        return True, ""
+    out = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()
+    if not out:
+        return False, f"z13ctl exit {r.returncode}"
+    return False, out.splitlines()[-1].strip()
+
+
+# False = not fetched yet; None = old asus-nb-wmi interface / unparsable.
+_TDP_RANGES = False
+
+
+def tdp_ranges():
+    """Accepted (PL1, PL2, PL3) min/max from `z13ctl tdp --get`, cached.
+
+    None means no per-limit range is reported (older asus-nb-wmi interface,
+    5–93 W flat) — callers skip clamping and rely on z13ctl's own refusal.
+    """
+    global _TDP_RANGES
+    if _TDP_RANGES is not False:
+        return _TDP_RANGES
+    _TDP_RANGES = None
+    r = z13ctl(["tdp", "--get"], timeout=15)
+    if r is not None and r.returncode == 0:
+        m = re.search(
+            r"PL1 (\d+)\S+?(\d+)W, PL2 (\d+)\S+?(\d+)W, PL3 (\d+)\S+?(\d+)W",
+            r.stdout)
+        if m:
+            _TDP_RANGES = tuple(
+                (int(m.group(i)), int(m.group(i + 1))) for i in (1, 3, 5))
+    return _TDP_RANGES
 
 
 # GZ302E asus-armoury firmware-attributes range (BIOS). WMI ppt_* can be

@@ -101,11 +101,11 @@ usage: z13-power <mode>
 
 modes:
   balanced     balanced profile, TDP 52/71/70, fan curve reset, undervolt reset
-  performance  performance profile, TDP 75/93/93, fan curve reset, undervolt reset
-  custom [W]   performance/balanced TDP slider 5–93 W (default last, else 75)
-  max          alias for custom 93
-  silent       quiet profile, TDP 20/20/20, undervolt -20 mV
-  lowpower     quiet profile, TDP 5 W, undervolt -25 mV
+  performance  performance profile, TDP 75/92/93, fan curve reset, undervolt reset
+  custom [W]   performance/balanced TDP slider 28–80 W (default last, else 75)
+  max          alias for custom 80 (firmware PL1 max; needs the forced fan floor)
+  silent       balanced profile, TDP 28/32/45, undervolt -20 mV
+  lowpower     quiet profile (firmware limits), undervolt -25 mV
   automatic    return the tray service to Automatic (per power state)
   lock         lock the current manual profile
   unlock       unlock the current profile
@@ -362,7 +362,7 @@ case "${1:-}" in
   performance)
     require_z13ctl
     set_profile performance
-    z13ctl tdp --set 75 --pl1 75 --pl2 93 --pl3 93
+    z13ctl tdp --set 75 --pl1 75 --pl2 92 --pl3 93
     z13ctl fancurve --reset
     reset_undervolt
 
@@ -371,7 +371,7 @@ case "${1:-}" in
     require_z13ctl
     watts="${2:-}"
     if [[ -n "$watts" && ! "$watts" =~ ^[0-9]+$ ]]; then
-      die "custom TDP must be an integer 5–93"
+      die "custom TDP must be an integer 28–80"
     fi
     if [[ -n "$watts" ]]; then
       python3 - <<PY
@@ -415,20 +415,22 @@ PY
     reset_undervolt
     ;;
   max)
-    exec "$0" custom 93
+    # 80 W is the asus-armoury PL1 max (BIOS 314+); the old 93 W is refused.
+    exec "$0" custom 80
     ;;
   silent)
     require_z13ctl
     set_profile balanced
-    z13ctl tdp --set 20 --pl2 20 --pl3 20
+    z13ctl tdp --set 28 --pl2 32 --pl3 45
     z13ctl fancurve --reset
     apply_undervolt -20
 
     ;;
   lowpower)
     require_z13ctl
+    # Firmware quiet manages its own limits; asus-armoury refuses PL1 < 28 W,
+    # so there is no TDP write to make (the old 5 W is gone).
     set_profile quiet
-    z13ctl tdp --set 5
     z13ctl fancurve --reset
     apply_undervolt -25
 

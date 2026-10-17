@@ -17,7 +17,7 @@ Works on Omarchy, Hyprland, KDE Plasma, and anything with a system tray.
 
 **Power**
 - Plug in → Performance. Unplug → Balanced. Low battery → Quiet.
-- Four recipes plus **Custom** (5–93 W slider). Quiet is a real **20 W** lock.
+- Four recipes plus **Custom** (28–80 W slider). Silent is the firmware-floor **32 W sustained** lock.
 - Lock a manual pick across plug/unplug. Low battery still forces Quiet, then restores it.
 - Handheld tablet (keyboard off or tablet hinge, no TV) → Quiet. Keyboard-off to a TV keeps high power.
 - Charge limit 40–100%, re-applied at login. One-shot *charge to 100%* for this plug-in only.
@@ -30,7 +30,7 @@ Works on Omarchy, Hyprland, KDE Plasma, and anything with a system tray.
 - Everywhere else: a tinted tray bolt. Left-click cycles; right-click opens the menu.
 - The **Armory Crate** side button opens settings on the desktop.
 - Nested **gamescope** (Steam, Lutris, Heroic) gets an in-game profile picker.
-- CLI: `z13-power custom` · `performance` · `balanced` · `silent` · `lowpower`. `max` is custom 93.
+- CLI: `z13-power custom` · `performance` · `balanced` · `silent` · `lowpower`. `max` is custom 80.
 
 </td>
 </tr>
@@ -60,11 +60,17 @@ Works on Omarchy, Hyprland, KDE Plasma, and anything with a system tray.
 
 | Mode | When | TDP (W) | Undervolt |
 |------|------|---------|-----------|
-| `performance` | **AC** | 75 / 75 / 93 / 93 | reset |
+| `performance` | **AC** | 75 / 92 / 93 | reset |
 | `balanced` | **Battery** | 52 / 71 / 70 | reset |
-| `silent` | **Low battery** | 20 / 20 / 20 | −20 mV |
-| `custom` | manual | 5–93 slider | reset |
-| `lowpower` | manual | 5 | −25 mV |
+| `silent` | **Low battery** | 28 / 32 / 45 | −20 mV |
+| `custom` | manual | 28–80 slider | reset |
+| `lowpower` | manual | firmware quiet | −25 mV |
+
+TDP limits are clamped at apply time against the live `z13ctl tdp --get`
+ranges, so a firmware interface change degrades instead of failing.
+BIOS 314+ (asus-armoury) caps PL1 at 80 W (`--force` above 75 W) and refuses
+anything below 28 W — the old 5–93 W asus-nb-wmi range is gone, so the 93 W
+MAX and 20 W/5 W quiet presets from earlier releases no longer exist.
 
 `z13-power status` prints the live state. `z13-power settings` opens the window
 (RGB, fan, battery, Tweaks, telemetry).
@@ -272,17 +278,23 @@ on_low_battery = silent
 
 [modes.performance]
 profile = performance
-tdp = 75 93 93        # PL1 PL2 PL3 watts (one number = all equal)
-tdp_force = false     # allow PL1 > 75 (hardware max 93)
+tdp = 75 92 93        # PL1 PL2 PL3 watts (one number = all equal, empty = skip)
+tdp_force = false     # allow PL1 > 75 (hardware max 80 on asus-armoury)
 fancurve = reset      # reset | "40:30%,50:40%,..." (8-point curve)
 undervolt = reset     # reset | -1..-40 (Curve Optimizer mV)
 ```
 
 Values are validated (bad ones fall back to defaults) and reloaded
-automatically every ~30s — no service restart needed.
+automatically every ~30s — no service restart needed. TDP values are clamped
+into the live firmware ranges at apply time; out-of-range values cannot fail
+the mode, they just apply capped.
 
 ## Caveats
 
+- **BIOS 314+ caps the power interface** (asus-armoury via z13ctl ≥ 1.4.0):
+  PL1 28–80 W (75 W without `--force`), PL2 32–92 W, PL3 45–93 W. The old
+  5–93 W asus-nb-wmi range is gone — 93 W MAX and the 20 W / 5 W quiet
+  presets from earlier releases are firmware-refused and were replaced.
 - **Undervolt is silicon lottery.** Quiet (`-20` mV) and Low (`-25` mV) were
   stable on one GZ302. If yours crashes under load, ease off: pull the Tweaks
   slider toward 0, or change `undervolt=` in those modes (`scripts/z13-power`

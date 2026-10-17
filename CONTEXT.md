@@ -46,16 +46,40 @@ Packaged as `z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
 | Mode | `z13ctl` calls |
 |------|----------------|
 | balanced | profile balanced; tdp 52/71/70; fancurve reset; undervolt reset |
-| performance | profile performance; tdp 75/75/93/93; fancurve reset; undervolt reset |
-| custom | TDP 5–93 from tweaks.conf `custom_tdp` (default 75); `--force` above 75 W |
-| max | alias for custom 93 |
-| silent | profile quiet; tdp 20/40/40; fancurve reset; undervolt -20 |
-| lowpower | profile quiet; tdp 5; fancurve reset; undervolt -25 |
+| performance | profile performance; tdp 75/92/93; fancurve reset; undervolt reset |
+| custom | TDP 28–80 from tweaks.conf `custom_tdp` (default 75); `--force` above 75 W |
+| max | alias for custom 80 (firmware PL1 max) |
+| silent | profile balanced; tdp 28/32/45 (interface floor); fancurve reset; undervolt -20 |
+| lowpower | profile quiet; NO tdp write (empty `tdp=` skips); fancurve reset; undervolt -25 |
 | status | prints profile/tdp/fancurve/undervolt |
 | settings | opens `z13-power-settings` (lighting/fan/battery/power) |
 
 TDP arg order: `--pl1 PL1 --pl2 PL2 --pl3 PL3`. UV steps skip gracefully when
 `ryzen_smu` module is absent.
+
+## asus-armoury TDP ranges (2026-10-12 z13ctl 1.4.2 + BIOS 314)
+
+`z13ctl` ≥ 1.4.0 (upstream dahui, released 2026-10-09) writes power limits
+through the kernel's asus-armoury firmware-attributes instead of asus-nb-wmi.
+The firmware-defined ranges are **PL1 28–80 W** (75 W without `--force`),
+**PL2 32–92 W**, **PL3 45–93 W**; `--set` below 28 W PL1 is refused (PL2/PL3
+below their minimums are raised silently). The old 5–93 W range is gone:
+93 W sustained MAX and the 20 W / 5 W quiet presets became refusals, and four
+of five modes failed silently from 2026-10-12 until fixed (only the failure
+toast fired; the chip sat at balanced stock).
+
+- **apply_mode clamps** every recipe into the live ranges read from
+  `z13ctl tdp --get` (the `Interface:` line, parsed by `tdp_ranges()` in
+  z13_power_common and cached per process). If the interface changes again,
+  modes degrade to the cap instead of failing.
+- **Empty `tdp=`** in a `[modes.*]` section skips the TDP write entirely
+  (lowpower: quiet profile manages its own limits; armoury refuses < 28 W).
+- **Failure reasons surface now**: `z13ctl_err()` returns z13ctl's refusal
+  text (last stdout/stderr line); `apply()` prints it to the journal and
+  puts it in the "Power profile error" toast. Previously `z13ctl_ok()`
+  discarded stderr and failures were opaque.
+- `CUSTOM_TDP_MIN/MAX` in z13_power_common are 28/80; `save_custom_tdp(93)`
+  call sites became 80; the settings/overlay have no hardcoded TDP bounds.
 
 Lighting settings live in `~/.config/z13-power/lighting.conf` (`[lighting]`
 section — device/mode/color1/color2/speed/brightness). Charge cap lives in
@@ -233,6 +257,73 @@ clears on a live AC/battery change.
 - `ryzen_smu` kernel module required for undervolt. Module: `ryzen_smu_drv`.
   AUR `ryzen_smu-dkms-git` (amkillam fork).
 - Sysfs perms: `users` group membership required (z13ctl setup + perms service).
+
+## SMU/EC wedge (P-state limit latch) — 2026-10-11
+
+Firmware-level failure mode hit on the original unit. Full write-up with all
+measurements: `diagnostics/2026-10-11-smu-wedge.md`.
+
+- **Symptom**: everything slow; all cores pinned at exactly 2.0 GHz (or 604 MHz
+  idle), package power ~7 W against a 52–75 W budget, GPU parked at 726 MHz,
+  fans 0 RPM, temps 36–47 °C. A 10^6-iteration python loop takes 3.3–4.2 s
+  (healthy: ~0.07 s).
+- **Cause**: the EC/SMU latches the P-state limit to the slowest state —
+  `MSR 0xC001_0061` bits[2:0] = 2 (wedged) vs 1 (healthy). Read-only to the
+  OS (writes GP-fault). Every sysfs value looks correct while the SMU refuses
+  to ramp.
+- **Survives**: suspend/resume cycles, AC plug/unplug, every profile/PPT write
+  (z13ctl, WMI, armoury, CO), asusd stopped, EPP/governor/boost toggles,
+  `amd_pstate` live re-init, kexec (same kernel AND LTS kernel), and a full
+  S5 reboot. **Only an EC power loss clears it.**
+- **Recovery**: poweroff → unplug charger → hold power button 40–60 s → boot.
+  ~2 min, no data loss. Verified working 2026-10-11. A full S5 reboot does
+  **NOT** clear it; kexec (same or different kernel) does not either.
+- **BIOS 314 flashed 2026-10-11** (was 311, 08/2025). No hard-wedge recurrence
+  on 314 yet — the watcher is the tripwire. (The 2026-10-12 watcher alarms were
+  false positives from GPU load, see Detection below.) If a hard wedge recurs
+  on 314, that is new firmware-level evidence worth reporting to ASUS/kernel.
+- **Detection**: `~/.local/bin/z13-wedge-watch` v3 (systemd user unit
+  `z13-wedge-watch.service`, deployed on the original unit, versioned at
+  `contrib/wedge-watch/`). v3 probes the wedge invariant: spin one core
+  ~1.4 s, require boost past 2.2 GHz. **Busy gate (v3, 2026-10-12 lesson)**:
+  a heavy iGPU load (wallfx, games) makes the SMU legitimately limit the CPU
+  to P2 — `MSR 0xC001_0061` bits[2:0]=2 shows under budget pressure too, so a
+  capped probe is only meaningful when the GPU is quiet and the package cool.
+  While amdgpu power > 15 W or k10temp > 80 °C a probe is inconclusive: no
+  fail counted, no alarm, no recovery clear, fails reset. A real wedge is
+  still caught by two consecutive idle probes ~90 s after load drops.
+  Hard-wedge signature: capped ~2.0 GHz with LOW package power (7 W), LOW
+  temps (36-47 °C) and a QUIET GPU. Alarm needs 2 consecutive failed idle
+  probes (~90 s apart). Log: `~/.local/state/z13-wedge-watch.log`
+  (transitions + hourly heartbeat, 500 KB cap). Root-level signature:
+  `MSR 0xC001_0061` bits[2:0] — 0x20/0x21 healthy *when idle/cool*; 0x22
+  alone is NOT proof of wedge (legit P2 budget limiting shows the same).
+  v1 lesson (do not regress): "max freq < 3 GHz while load > 2" false-alarms —
+  on battery with EPP balance_power, load 2-3 legitimately parks clocks at
+  2.7-2.9 GHz because no single core is pushed. v2 lesson: the probe-only
+  invariant false-alarms under iGPU load (5 false alarms from wallfx on
+  2026-10-12).
+- **Implication for this repo**: NO software kick (including any post-resume
+  hook we might add) can heal this failure mode — the wedge is below every
+  interface z13power owns. Prevention/detection is the only software answer.
+  Trigger unknown; correlated with long s2idle on battery and the 2026-10-10
+  profile-flapping session.
+
+## z13power findings from the wedge investigation (real bugs, fix later)
+
+- **asusd rejects armoury PPT sets on battery**: `asusctl armoury set` fails
+  with "profile tuning is disabled for current profile and power state" when
+  on battery. z13power's `write_armoury_ppt` calls fail silently → asusd's
+  cache drifts from the applied values (cache said 75, sysfs said 52) → asusd
+  can restore stale defaults on its own events. Fix: surface the rejection,
+  verify-after-write (read back `current_value`), and/or mask asusd.
+- **PPD is masked by the installer** (correct, sole profile ownership), but
+  powerdevil then writes EPP directly and flip-flops it (balance_power ↔
+  performance) on every profile/platform change. Harmless to clocks but noisy;
+  worth suppressing or documenting.
+- **The Oct 10 `read_power` ucsi fallback patch works** — generic USB-C PD
+  chargers keep EC mains (AC0) offline; the ucsi source-psy fallback aligned
+  z13power with reality and stopped the performance↔balanced flapping.
 
 ## Packaging
 
