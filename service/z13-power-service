@@ -71,7 +71,7 @@ from z13_power_common import (  # noqa: E402
     LIGHTING_PATH, STATE_DIR, STATUS_PATH, TWEAKS_PATH,
     apply_saved_charge_limit, custom_mode_def, load_battery_conf,
     load_custom_tdp, read_power, read_tablet, runtime_dir, save_battery_conf,
-    save_custom_tdp, theme_mod as _theme_mod, tdp_ranges, write_armoury_ppt,
+    save_custom_tdp, theme_mod as _theme_mod, write_armoury_ppt,
     write_charge_threshold, write_wmi_ppt, read_wmi_pl1, z13ctl, z13ctl_err,
     z13ctl_ok,
 )
@@ -119,25 +119,21 @@ MODE_COLORS = {
 }
 
 DEFAULT_MODES = {
-    # asus-armoury limits (BIOS 314+, z13ctl >= 1.4.0): PL1 28–80 W
-    # (75 W without --force), PL2 32–92 W, PL3 45–93 W. apply_mode clamps
-    # against the live `tdp --get` ranges, so these stay safe even if the
-    # firmware interface changes under us again.
+    # asus-armoury still floors PL1 at 28 W. The package follows the SMU
+    # write in z13_power_hw, so Quiet can be 20 W and Low 10 W.
     "performance": {"profile": "performance", "tdp": "75 92 93",
                     "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
     "balanced": {"profile": "balanced", "tdp": "52 71 70",
                  "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
-    # Balanced + the interface floor (z13ctl raises PL2/PL3 to 32/45 W).
-    # Firmware "quiet" pins ~40 W; this is the deepest sustained cap we get.
-    "silent": {"profile": "balanced", "tdp": "28 32 45",
+    # Firmware "quiet" pins SMU ~40W and ignores PPT. Balanced + 20W.
+    "silent": {"profile": "balanced", "tdp": "20 20 20",
                "tdp_force": "false", "fancurve": "reset", "undervolt": "-20"},
     "custom": {"profile": "performance", "tdp": "75 75 75",
                "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
     "max": {"profile": "performance", "tdp": "80 92 93",
             "tdp_force": "true", "undervolt": "reset"},
-    # Firmware quiet manages its own limits; an empty tdp skips the write
-    # (armoury refuses PL1 < 28 W, and PPT is not what pins quiet anyway).
-    "lowpower": {"profile": "quiet", "tdp": "",
+    # Same firmware-quiet problem. 10W is the lowest this APU holds under load.
+    "lowpower": {"profile": "balanced", "tdp": "10",
                  "tdp_force": "false", "fancurve": "reset", "undervolt": "-25"},
 }
 
@@ -159,7 +155,7 @@ low_battery = 15
 # Which MODE to apply in each power state, used while the tray is on "Automatic".
 #
 # Valid modes:  performance | balanced | silent | custom | lowpower
-#   custom=28–80W slider, performance=75W, balanced=52W, silent=28W, lowpower=quiet
+#   custom=10–80W slider, performance=75W, balanced=52W, silent=20W, lowpower=10W
 #   (each one is defined in a [modes.<name>] section below).
 #
 # A MODE is a complete recipe: firmware profile + TDP limits + fan curve +
@@ -197,14 +193,10 @@ on_tablet = silent
 #              PL1 = sustained (long-term) power cap.
 #              PL2 = boost / short-burst power cap.
 #              PL3 = peak / emergency burst cap.
-#              asus-armoury limits (BIOS 314+, z13ctl >= 1.4.0; the old
-#              asus-nb-wmi 5–93 W interface is gone):
-#                PL1 28–80 W  (75 W max without tdp_force)
-#                PL2 32–92 W  (values below the minimum are raised by z13ctl)
-#                PL3 45–93 W
-#              Values outside the range are CLAMPED at apply time — the
-#              service reads the live limits from `z13ctl tdp --get`, so a
-#              firmware change degrades instead of failing the mode.
+#              The package follows the Ryzen SMU, not the asus-armoury
+#              floor (PL1 28 / PL2 32 / PL3 45). Quiet is 20 W. Low holds
+#              10 W, which is as low as this APU stays under load.
+#              PL1 above 75 W needs tdp_force (armoury PL1 tops out at 80).
 #
 #  tdp_force   true  -> allow PL1 above 75 W, up to the hardware max (80 W;
 #                       also writes a 50% PWM fan floor that reaches 100% at
@@ -218,7 +210,7 @@ on_tablet = silent
 #                percentage with % (non-decreasing). Formats may be mixed.
 #                e.g. 40:30%,50:40%,60:60%,70:75%,80:90%,85:95%,90:98%,95:100%
 #              NOTE: the kernel drops custom curves on every power profile
-#              change; the z13ctl daemon re-applies within a couple of seconds.
+#              change; the tray service re-applies its recipe.
 #
 #  undervolt   reset   -> CPU stock voltage (0).
 #              -1..-40 -> negative Curve Optimizer offset in mV, applied to all
@@ -226,12 +218,12 @@ on_tablet = silent
 #                Requires the ryzen_smu kernel module (ryzen_smu-dkms-git AUR,
 #                amkillam fork for Strix Halo). Without it the undervolt step
 #                is skipped while profile/TDP/fancurve still apply. CO values
-#                are volatile across reboot/sleep; the z13ctl daemon re-applies
-#                them on startup/resume.
+#                are volatile across reboot/sleep; the tray service re-applies
+#                them on startup.
 # -----------------------------------------------------------------------------
 
 [modes.custom]
-# Live watts come from tweaks.conf custom_tdp (28–80, default 75).
+# Live watts come from tweaks.conf custom_tdp (10–80, default 75).
 # This section is only a fallback if that key is missing.
 profile = performance
 tdp = 75 75 75
@@ -254,20 +246,17 @@ fancurve = reset
 undervolt = reset
 
 [modes.silent]
-# Not firmware "quiet": that profile pins ~40W. Balanced + the armoury
-# floor (PL1 28 W is the lowest the interface accepts; z13ctl raises
-# PL2/PL3 to 32/45 W) — the deepest sustained cap available on BIOS 314+.
+# Not firmware "quiet": that profile pins ~40W and ignores PPT.
 profile = balanced
-tdp = 28 32 45
+tdp = 20 20 20
 tdp_force = false
 fancurve = reset
 undervolt = -20
 
 [modes.lowpower]
-# Empty tdp skips the write: armoury refuses PL1 < 28 W and the quiet
-# profile pins its own (lower-fan) limits anyway.
-profile = quiet
-tdp =
+# Not firmware "quiet". 10W is the lowest sustained limit this APU holds.
+profile = balanced
+tdp = 10
 tdp_force = false
 fancurve = reset
 undervolt = -25
@@ -399,23 +388,9 @@ def apply_mode(mode_def, force=False):
         pl1, pl2, pl3 = nums
     else:
         return False, f"bad tdp in mode config: '{tdp}'"
-    # Clamp into what the firmware interface actually accepts. The old
-    # asus-nb-wmi ranges (5–93 W) moved to asus-armoury (PL1 28–80, PL2
-    # 32–92, PL3 45–93) with z13ctl 1.4.0 / BIOS 314 and four of five
-    # presets died silently; ranges come from `tdp --get`, not this file.
-    ranges = tdp_ranges()
-    if ranges:
-        (lo1, hi1), (lo2, hi2), (lo3, hi3) = ranges
-        # Without --force z13ctl also refuses PL1 above 75 W.
-        hi1_eff = hi1 if tdp_force else min(hi1, 75)
-        fixed = (max(lo1, min(pl1, hi1_eff)),
-                 max(lo2, min(pl2, hi2)),
-                 max(lo3, min(pl3, hi3)))
-        if fixed != (pl1, pl2, pl3):
-            print(f"z13-power: clamped TDP {pl1}/{pl2}/{pl3} W -> "
-                  f"{fixed[0]}/{fixed[1]}/{fixed[2]} W (firmware limits)",
-                  flush=True)
-            pl1, pl2, pl3 = fixed
+    # Do not clamp to the asus-armoury floor. That interface stops at
+    # 28/32/45 W; z13_power_hw writes the requested watts to the SMU,
+    # which is what the package follows (down to about 10 W).
     args = ["tdp", "--set"]
     if pl1 == pl2 == pl3:
         args.append(str(pl1))
@@ -2508,6 +2483,14 @@ class Service:
         pl2 = want[1] if len(want) >= 3 else pl1
         pl3 = want[2] if len(want) >= 3 else pl1
         write_wmi_ppt(pl1, pl2, pl3)
+        # asusd leaves WMI alone and writes its Balanced limits into the
+        # SMU. Put the requested watts back. Armoury is left untouched:
+        # rewriting it makes the EC push 28/32/45 over the SMU again.
+        try:
+            from z13_power_hw import _smu_ppt
+            _smu_ppt(int(pl1), int(pl2), int(pl3))
+        except (TypeError, ValueError, OSError):
+            pass
 
     def on_poll(self):
         ac, capacity = read_power()
@@ -2532,7 +2515,10 @@ class Service:
         # Something else wrote platform_profile (DE power panel, z13ctl, …).
         # Re-apply the full recipe (force TDP) — skip-if-same on the mode
         # name would keep the label and leave stock PPT behind.
-        if self.automatic or self.locked:
+        # Re-apply our recipe. Quiet and Low both use firmware profile
+        # "balanced", so mapping that name to the Balanced mode would
+        # store 52/71/70 and the next start would leave Quiet behind.
+        if self.automatic or self.locked or self.manual_mode in MODE_ORDER:
             ac, capacity = read_power()
             low = not ac and capacity is not None and capacity <= self.cfg["low_battery"]
             if self.automatic:

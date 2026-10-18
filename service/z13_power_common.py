@@ -28,10 +28,9 @@ CONFIG_PATH = os.path.expanduser("~/.config/z13-power/service.conf")
 LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
 BATTERY_PATH = os.path.expanduser("~/.config/z13-power/battery.conf")
 TWEAKS_PATH = os.path.expanduser("~/.config/z13-power/tweaks.conf")
-# asus-armoury firmware-attributes limits (BIOS 314+, z13ctl >= 1.4.0):
-# PL1 28–80W (75 W without --force), PL2 32–92W, PL3 45–93W. The old
-# asus-nb-wmi interface accepted 5–93 W — those presets are gone.
-CUSTOM_TDP_MIN = 28
+# Slider range the package will hold. asus-armoury PL1 still tops out at 80 W.
+# The floor is 10 W because the SMU will not sustain less than that.
+CUSTOM_TDP_MIN = 10
 CUSTOM_TDP_MAX = 80
 CUSTOM_TDP_DEFAULT = 75
 CHARGE_LIMIT_PATH = "/sys/class/power_supply/BAT0/charge_control_end_threshold"
@@ -238,8 +237,10 @@ def save_custom_tdp(watts):
 
 
 def custom_mode_def(watts):
-    """Recipe for the Custom pill: PL1=PL2=PL3=watts, 28–80."""
+    """Recipe for the Custom pill. The package holds 10–80 W."""
     w = clamp_custom_tdp(watts)
+    if w < 10:
+        w = 10
     if w < 75:
         # Below the armoury PL2/PL3 minimums z13ctl raises them itself
         # (e.g. --set 28 writes 28/32/45 W), so a flat triple is fine.
@@ -282,12 +283,15 @@ def theme_mod():
     return z13_power_theme
 
 
-Z13CTL_BIN = "/usr/bin/z13ctl"
-
-
 def z13ctl(args, timeout=Z13CTL_TIMEOUT):
-    """Run a z13ctl command; return the CompletedProcess or None."""
-    return run_helper(["z13ctl", *args], timeout=min(max(timeout, 0.1), Z13CTL_TIMEOUT))
+    """Apply a hardware command with the built-in controller.
+
+    Does not execute /usr/bin/z13ctl. timeout is kept so callers that still
+    pass one stay valid; the work runs in this process.
+    """
+    del timeout
+    from z13_power_hw import invoke
+    return invoke(list(args))
 
 
 def z13ctl_ok(args, timeout=30):
@@ -304,12 +308,12 @@ def z13ctl_err(args, timeout=30):
     """
     r = z13ctl(args, timeout=timeout)
     if r is None:
-        return False, "z13ctl did not run"
+        return False, "hardware controller did not run"
     if r.returncode == 0:
         return True, ""
     out = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()
     if not out:
-        return False, f"z13ctl exit {r.returncode}"
+        return False, f"hardware controller exit {r.returncode}"
     return False, out.splitlines()[-1].strip()
 
 
@@ -338,8 +342,10 @@ def tdp_ranges():
     return _TDP_RANGES
 
 
-# GZ302E asus-armoury firmware-attributes range (BIOS). WMI ppt_* can be
-# written lower, but the APU follows these. Quiet cannot go below PL1 28.
+# GZ302E asus-armoury firmware-attributes range (BIOS). The attributes
+# themselves reject anything under these mins. The package follows the
+# SMU limits written by z13_power_hw, which can sit under this floor.
+# Below about 10 W the SMU stores the number and the package does not.
 ARMOURY_PPT = {
     "ppt_pl1_spl": (28, 80),
     "ppt_pl2_sppt": (32, 92),
@@ -411,8 +417,12 @@ def write_armoury_ppt(pl1, pl2=None, pl3=None):
         lo, hi = ARMOURY_PPT[name]
         val = max(lo, min(hi, val))
         path = os.path.join(ARMOURY_PPT_DIR, name, "current_value")
-        sys_write(path, str(val))
-        run_helper(["asusctl", "armoury", "set", name, str(val)], timeout=5.0)
+        current = sys_read(path)
+        if current is None or current.strip() != str(val):
+            sys_write(path, str(val))
+            run_helper(["asusctl", "armoury", "set", name, str(val)], timeout=5.0)
+    from z13_power_hw import _smu_ppt
+    _smu_ppt(pl1, int(pl2), int(pl3))
 
 
 

@@ -7,7 +7,7 @@ when working in this repo. Human-facing docs live in README.md (Forgejo page).
 
 Automate power control on a 2025 ASUS ROG Flow Z13 (GZ302) and replace the
 z13gui overlay drawer. Three components:
-- `z13-power` — CLI modes wrapping `z13ctl` (AUR `z13ctl-bin`, github dahui/z13ctl)
+- `z13-power` — CLI modes. Hardware goes through `z13_power_hw.py` (SMU + sysfs). `/usr/bin/z13ctl` is not executed.
 - `z13-power-service` — PyQt6 system tray app + power profile watcher that OWNS
   all profile switching (login, AC/battery transitions, low battery, notifications)
 - `z13-power-settings` — standalone PyQt6 settings window (launched from the tray
@@ -15,7 +15,7 @@ z13gui overlay drawer. Three components:
   limit, panel overdrive, boot sound, live telemetry. Replaces z13gui.
 
 KDE PowerDevil Run Script hooks are intentionally NOT used — the runtime is
-plain Qt + z13ctl + systemd, so it works on any desktop (KDE Plasma, and
+plain Qt + the built-in controller + systemd, so it works on any desktop (KDE Plasma, and
 Hyprland/Omarchy, whose bar already ships an SNI tray + notification daemon).
 Only the optional display/DPMS config (`powerdevilrc`, `z13-power-config`) is
 Plasma-specific. TDP / undervolt defaults are silicon-lottery values from
@@ -27,7 +27,8 @@ Packaged as `z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
 - `scripts/z13-power` — mode CLI (applies profiles SILENTLY; no notifications)
 - `service/z13-power-service` — tray + watcher (PyQt6): the only notifier
 - `service/z13-power-settings` — settings window (PyQt6): z13gui replacement
-- `service/z13_power_common.py` — shared paths, z13ctl, battery.conf / charge cap
+- `service/z13_power_hw.py` — SMU PPT, profile, fans, lighting, Curve Optimizer
+- `service/z13_power_common.py` — shared paths, battery.conf / charge cap. `z13ctl()` calls the in-tree controller.
 - `service/z13_power_io.py` — bounded conf/status I/O and helper processes
   (prefer /usr/bin, PATH fallback; no marketplace digest pin)
 - `service/z13-power-overlay` — slim in-game profile picker for nested gamescope
@@ -41,45 +42,34 @@ Packaged as `z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
   theme). Never copies only `z13-power` into `/usr/share`.
 - `LICENSE` — GPL-3.0-or-later
 
-## Mode → z13ctl mapping
+## Mode → hardware mapping
 
-| Mode | `z13ctl` calls |
+| Mode | What the controller applies |
 |------|----------------|
 | balanced | profile balanced; tdp 52/71/70; fancurve reset; undervolt reset |
 | performance | profile performance; tdp 75/92/93; fancurve reset; undervolt reset |
-| custom | TDP 28–80 from tweaks.conf `custom_tdp` (default 75); `--force` above 75 W |
-| max | alias for custom 80 (firmware PL1 max) |
-| silent | profile balanced; tdp 28/32/45 (interface floor); fancurve reset; undervolt -20 |
-| lowpower | profile quiet; NO tdp write (empty `tdp=` skips); fancurve reset; undervolt -25 |
+| custom | TDP 10–80 from tweaks.conf `custom_tdp` (default 75); `--force` above 75 W |
+| max | alias for custom 80 (armoury PL1 max) |
+| silent | profile balanced; SMU 20/20/20; fancurve reset; undervolt -20 |
+| lowpower | profile balanced; SMU 10 W; fancurve reset; undervolt -25 |
 | status | prints profile/tdp/fancurve/undervolt |
 | settings | opens `z13-power-settings` (lighting/fan/battery/power) |
 
-TDP arg order: `--pl1 PL1 --pl2 PL2 --pl3 PL3`. UV steps skip gracefully when
-`ryzen_smu` module is absent.
+TDP arg order: `--pl1 PL1 --pl2 PL2 --pl3 PL3`. The SMU stapm and slow limits
+are PL1; fast is max(PL2, PL3). UV and the below-floor TDP path need `ryzen_smu`.
 
-## asus-armoury TDP ranges (2026-10-12 z13ctl 1.4.2 + BIOS 314)
+## Power limits (SMU, not z13ctl)
 
-`z13ctl` ≥ 1.4.0 (upstream dahui, released 2026-10-09) writes power limits
-through the kernel's asus-armoury firmware-attributes instead of asus-nb-wmi.
-The firmware-defined ranges are **PL1 28–80 W** (75 W without `--force`),
-**PL2 32–92 W**, **PL3 45–93 W**; `--set` below 28 W PL1 is refused (PL2/PL3
-below their minimums are raised silently). The old 5–93 W range is gone:
-93 W sustained MAX and the 20 W / 5 W quiet presets became refusals, and four
-of five modes failed silently from 2026-10-12 until fixed (only the failure
-toast fired; the chip sat at balanced stock).
+asus-armoury (BIOS 314) still stores only **PL1 28–80 W**, **PL2 32–92 W**,
+**PL3 45–93 W**. `z13ctl` 1.4.x refuses anything outside that and is not used.
+`z13_power_hw.py` writes the requested watts to the Strix Halo MP1 mailbox
+(stapm `0x14`, fast `0x15`, slow `0x16`, milliwatts) after the armoury update.
+On this GZ302 the package holds that down to **10 W**. Quiet is 20 W. Low is
+10 W. A 5 W request is stored and the chip stays near 10 W.
 
-- **apply_mode clamps** every recipe into the live ranges read from
-  `z13ctl tdp --get` (the `Interface:` line, parsed by `tdp_ranges()` in
-  z13_power_common and cached per process). If the interface changes again,
-  modes degrade to the cap instead of failing.
-- **Empty `tdp=`** in a `[modes.*]` section skips the TDP write entirely
-  (lowpower: quiet profile manages its own limits; armoury refuses < 28 W).
-- **Failure reasons surface now**: `z13ctl_err()` returns z13ctl's refusal
-  text (last stdout/stderr line); `apply()` prints it to the journal and
-  puts it in the "Power profile error" toast. Previously `z13ctl_ok()`
-  discarded stderr and failures were opaque.
-- `CUSTOM_TDP_MIN/MAX` in z13_power_common are 28/80; `save_custom_tdp(93)`
-  call sites became 80; the settings/overlay have no hardcoded TDP bounds.
+- apply_mode does **not** clamp recipes up to the armoury floor.
+- The upstream `z13ctl` user daemon is masked so it cannot put the old limits back.
+- `CUSTOM_TDP_MIN/MAX` are 10/80.
 
 Lighting settings live in `~/.config/z13-power/lighting.conf` (`[lighting]`
 section — device/mode/color1/color2/speed/brightness). Charge cap lives in
@@ -114,10 +104,9 @@ State: `automatic` (default), `manual_mode`, `locked`. Automatic off,
 the manual mode, and lock are restored from `status.json` on login so a
 reboot does not silently re-enable Automatic. Unlocked manual still
 clears on a live AC/battery change.
-- **Executor**: the service runs `z13ctl` DIRECTLY per mode — it no longer
-  shells out to `z13-power` (removes both the config gap and double
-  notifications from a stale z13-power). `z13-power` remains only as the
-  manual CLI (its hardcoded presets match DEFAULT_MODES).
+- **Executor**: the service calls `z13_power_hw.invoke` per mode (the
+  in-tree controller). It does not shell out to `/usr/bin/z13ctl` or to
+  the `z13-power` CLI. `z13-power` remains the manual CLI.
 - **Apply order**: `profile --set` is skipped when `/sys/firmware/acpi/platform_profile`
   already matches. A redundant write still restores stock PPT (performance = 70W)
   and drops custom fan curves, so MAX then races `--force` and stays at 70W.
@@ -169,9 +158,10 @@ clears on a live AC/battery change.
   `z13ctl`). Settings tabs are built on first view; Tweaks/Fan/Battery/
   Telemetry reads go through sysfs (k10temp, asus fans, panel_od, boot_sound,
   ppt_pl1_spl, charge_control_end_threshold) and fall back to z13ctl.
-- **Diagnose**: `z13-power diagnose` subcommand checks hardware (DMI), z13ctl,
-  users group, udev rules, sysfs writability, daemon, `z13ctl status`, ryzen_smu,
-  notify-send — each with a fix; exit 0/1. Tray menu has **Diagnose…**
+- **Diagnose**: `z13-power diagnose` checks the built-in controller, the
+  users group, udev rules, sysfs writability, that the upstream z13ctl
+  daemon is not running, hardware status, ryzen_smu, and notify-send.
+  Exit 0/1. Tray menu has **Diagnose…**
   (QMessageBox) and the service runs it 20s after startup, notifying only on FAIL.
 - **ryzen_smu detection**: module name in /proc/modules is `ryzen_smu` (not
   `ryzen_smu_drv`); check `/sys/kernel/ryzen_smu_drv` dir instead. This bug
@@ -222,18 +212,18 @@ clears on a live AC/battery change.
 
 ## Conflict rules (the important gotchas)
 
-- **z13ctl `autoswitch` must stay OFF** — it races the service on power changes.
+- If `z13ctl` is installed, its `autoswitch` must stay OFF and its user
+  daemon must stay masked. Either one races this service.
 - **No per-state power profiles from the desktop's own power manager** — on KDE
   that's System Settings → Power Management (writes `platform_profile`); on
   Omarchy/Hyprland it's the bar's **Power panel** (switches profiles and
   remembers separate AC/battery choices). Both would fight the service — keep
   the service as the single switcher.
-- z13ctl daemon required for TDP/fancurve/undervolt persistence. It also
-  watches the Armory Crate side button (KEY_PROG3) and emits `gui-toggle`
-  on its Unix socket. z13-power-service subscribes and **toggles** settings
-  or the gamescope overlay (press open, press again close). Do not also
-  bind that key in the compositor — the daemon already grabs it.
-  `--no-button` would disable the watcher and break this.
+- TDP, fan curve, and undervolt persistence is the tray service. It
+  writes the Ryzen SMU directly. The upstream `z13ctl` user daemon is
+  masked and is not required. The service watches the Armory Crate side
+  button (`Asus WMI hotkeys`, KEY_PROG3) itself and toggles settings or
+  the gamescope overlay. Do not also bind that key in the compositor.
 - Nested gamescope: if the focused *host* window is gamescope, spawn
   `z13-power-overlay` on the nested Xwayland (`QT_QPA_PLATFORM=xcb`,
   `Z13_GAMESCOPE=1`). Tag with `xprop` in a child process: `STEAM_OVERLAY`
@@ -256,7 +246,8 @@ clears on a live AC/battery change.
 - USB VID:PID `0b05:18c6` (keyboard/RGB HID) and `0b05:1a30` (folio).
 - `ryzen_smu` kernel module required for undervolt. Module: `ryzen_smu_drv`.
   AUR `ryzen_smu-dkms-git` (amkillam fork).
-- Sysfs perms: `users` group membership required (z13ctl setup + perms service).
+- Sysfs perms: `users` group membership, plus udev rules
+  (`99-z13ctl.rules` or `99-z13-power.rules`).
 
 ## SMU/EC wedge (P-state limit latch) — 2026-10-11
 
@@ -333,14 +324,14 @@ measurements: `diagnostics/2026-10-11-smu-wedge.md`.
   - The `z13-power-git` PKGBUILD in the pkgbuilds repo sources Ramzal's URL
     (repointed 2026-10-10).
 - PKGBUILD `z13-power-git` in the `pkgbuilds` repo (paru custom source).
-- depends: `z13ctl-bin python-pyqt6 python-pyudev libnotify python-dbus-next
-  ryzen_smu-dkms-git`. Undervolt needs a kernel module rebuilt for each
+- depends: `python-pyqt6 python-pyudev libnotify python-dbus-next
+  ryzen_smu-dkms-git`. `z13ctl-bin` is not a dependency. Undervolt needs a kernel module rebuilt for each
   kernel via DKMS — do not ship a prebuilt .ko. `ryzen_smu-dkms-git` is
   the amkillam fork (Strix Halo). Kernel `-headers` for the running kernel
   must be installed or DKMS cannot build. (z13gui-bin was dropped when the
   settings window replaced it.)
 - package(): installs z13-power, z13-power-service, z13-power-settings,
-  z13_power_theme.py, z13_power_common.py, contrib/ryzen-smu udev +
+  z13_power_hw.py, z13_power_theme.py, z13_power_common.py, contrib/ryzen-smu udev +
   modules-load, systemd user unit, z13-power-config, powerdevilrc, LICENSE.
 - The packaged service's `.install` hook: enable+start on install;
   daemon-reload + restart on upgrade (new code deploys without re-login);

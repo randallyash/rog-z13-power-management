@@ -4,21 +4,22 @@
 #
 # Installs the z13-power profile manager, the z13-power-service tray/watcher
 # (which owns all power profile switching) and the z13-power-settings window
-# (lighting, fan curve, battery, power), and enables the z13ctl daemon stack.
+# (lighting, fan curve, battery, power). Hardware control ships in
+# service/z13_power_hw.py and writes the Ryzen SMU directly. z13ctl is not
+# required; its user daemon is masked if it is installed.
 # On KDE Plasma it also deploys the PowerDevil display settings; other
 # desktops (Hyprland, etc.) manage display/DPMS themselves and are skipped.
 #
 # Requirements:
 #   - 2025 ASUS ROG Flow Z13 (GZ302)
 #   - Arch Linux / CachyOS (KDE Plasma 6, Hyprland, etc.)
-#   - AUR packages: z13ctl-bin (required)
-#   - ryzen_smu kernel module for undervolt support (optional)
+#   - ryzen_smu kernel module (required for SMU power limits and undervolt)
 #   - The rog-z13-trackpad-fix project for the touchpad DWT fix (optional)
 #   - Non-KDE Wayland: a system tray host (SNI) + notification daemon for the
 #     tray icon and popups (Omarchy/Hyprland setups usually have both)
 #
 # Usage:  ./install.sh
-# Some steps prompt for sudo (z13ctl setup writes udev rules + system unit).
+# Some steps prompt for sudo (udev rules and the share directory).
 
 set -euo pipefail
 
@@ -31,29 +32,28 @@ ERR()   { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*"; exit 1; }
 [[ -n "${HOME:-}" ]] || ERR "Cannot determine HOME (are you root? run as your user)."
 [[ -e /proc/driver/version || -r /sys/class/power_supply ]] || ERR "This must run on the Z13 itself (no sysfs access)."
 
-# z13ctl is a hard dependency.
-if ! command -v z13ctl >/dev/null 2>&1; then
-  ERR "z13ctl not found. Install it first: paru -S z13ctl-bin  (AUR, github.com/dahui/z13ctl)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ ! -f "$SCRIPT_DIR/service/z13_power_hw.py" ]]; then
+  ERR "service/z13_power_hw.py is missing — this tree is incomplete."
 fi
-OK "z13ctl found: $(z13ctl --version | head -1)"
+OK "built-in hardware controller: service/z13_power_hw.py"
 
 
 # Optional: ryzen_smu (needed for undervolt; z13-power skips it gracefully).
 if ! grep -qw ryzen_smu_drv /proc/modules 2>/dev/null; then
-  WARN "ryzen_smu kernel module not loaded — undervolt modes will skip the UV step."
-  WARN "Install/load it if you want undervolt: e.g. paru -S ryzen_smu-dkms-git"
+  WARN "ryzen_smu kernel module not loaded — TDP below the armoury floor and undervolt will not apply."
+  WARN "Install/load it: e.g. paru -S ryzen_smu-dkms-git"
 fi
 
-# Optional: 'users' group membership (z13ctl setup grants device access to this group).
+# Optional: 'users' group membership (udev rules grant device access to this group).
 if ! id -nG | tr ' ' '\n' | grep -qw users; then
-  WARN "You are not in the 'users' group. z13ctl grants device access to that group."
+  WARN "You are not in the 'users' group. Device nodes are often group-writable for it."
   WARN "  Run: sudo usermod -aG users \"$USER\"   then log out and back in."
 fi
 
 # ── 1. Install the profile manager + tray service ─────────────────────────────
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 install_runtime() {
   local dest="$1"
@@ -65,6 +65,7 @@ install_runtime() {
   install -m644 "$SCRIPT_DIR/service/z13_power_theme.py" "$dest/z13_power_theme.py"
   install -m644 "$SCRIPT_DIR/service/z13_power_common.py" "$dest/z13_power_common.py"
   install -m644 "$SCRIPT_DIR/service/z13_power_io.py" "$dest/z13_power_io.py"
+  install -m644 "$SCRIPT_DIR/service/z13_power_hw.py" "$dest/z13_power_hw.py"
 }
 
 install_runtime "$BIN_DIR"
@@ -120,11 +121,10 @@ if [[ -d "$HOME/.config/omarchy" ]]; then
 fi
 
 # ── 2. z13ctl device permissions (udev rules + perms service) ─────────────────
-if [[ ! -f /etc/udev/rules.d/99-z13ctl.rules ]]; then
-  INFO "Running 'sudo z13ctl setup' to install udev rules + z13ctl-perms.service..."
-  sudo z13ctl setup || WARN "z13ctl setup failed — you can re-run it later with: sudo z13ctl setup"
+if [[ -f /etc/udev/rules.d/99-z13ctl.rules || -f /etc/udev/rules.d/99-z13-power.rules ]]; then
+  OK "udev rules already present"
 else
-  OK "z13ctl udev rules already present"
+  WARN "No z13 udev rules found. Sysfs writes may need root until rules are installed."
 fi
 
 # Armoury firmware-attributes PPT — the APU obeys these, not only WMI ppt_*.
@@ -148,9 +148,9 @@ if [[ -x "$BIN_DIR/z13-power" ]]; then
     WARN "setup-undervolt failed — Tweaks slider will save; re-run: z13-power setup-undervolt"
 fi
 
-# ── 3. Enable the daemon stack ────────────────────────────────────────────────
-systemctl --user enable --now z13ctl.socket z13ctl.service 2>/dev/null || \
-  WARN "Could not enable z13ctl user units — are they installed (z13ctl setup)?"
+# ── 3. Upstream z13ctl daemon fights these writes. Leave it off. ─────────────
+systemctl --user mask --now z13ctl.socket z13ctl.service 2>/dev/null || true
+OK "Upstream z13ctl user daemon masked (z13-power owns the hardware)"
 
 # ── 4. Touchpad DWT fix (optional, from rog-z13-trackpad-fix) ────────────────
 if [[ ! -f /etc/udev/rules.d/99-rog-z13-touchpad.rules ]]; then

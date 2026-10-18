@@ -19,19 +19,23 @@ cap survives reboot.
 
 This is for every **2025 GZ302** on Linux.
 
+Power limits go straight to the Ryzen SMU. `z13ctl` is not a dependency,
+and its user daemon is masked when it is installed. asus-armoury still
+floors its own attributes at 28/32/45 W. The package follows the SMU:
+Quiet is 20 W, and Low holds 10 W, which is as low as this APU will stay.
+
 ---
 
 ## Bounded settings I/O
 
 Conf and status reads are size-capped. Writes go through an exclusive temp
 file, fsync, then rename. Helpers (`z13ctl`, `xdg-open`, `fc-match`, …) are
-time-capped and reaped. `z13-power --version` prints `z13-power 1.1.0`.
+time-capped and reaped. `z13-power --version` prints `z13-power 1.2.0`.
 
 This is **not** the Omarchy marketplace pin. GitHub tags `v1.1.1`–`v1.1.4`
-require an exact `/usr/bin/z13ctl` digest and refuse `~/.local/bin`. This
-tree still supports paru `z13-power-git` / `z13ctl-bin` (including a rebuilt
-binary), `./install.sh` into `~/.local/bin`, and the tray bolt on KDE /
-Cachy / any SNI host — Omarchy is optional.
+require an exact `/usr/bin/z13ctl` digest. This tree does not. `z13ctl-bin`
+is not a dependency. `./install.sh` into `~/.local/bin` still works, and the
+tray bolt works on KDE / Cachy / any SNI host. Omarchy is optional.
 
 Packagers: ship `service/z13_power_io.py` next to `z13_power_common.py`.
 

@@ -5,9 +5,11 @@
 > lottery · charge cap that survives reboot · **~99% less idle work**.
 
 Power, lighting, and thermals for the **2025 ASUS ROG Flow Z13 (GZ302)** —
-one service, no Armory Crate, no Windows. Built on
-[z13ctl](https://github.com/dahui/z13ctl). Replaces the z13gui overlay drawer.
-Works on Omarchy, Hyprland, KDE Plasma, and anything with a system tray.
+one service, no Armory Crate, no Windows. Power limits are written directly
+to the Ryzen SMU (stapm, slow, and fast). **`z13ctl` is not a dependency**,
+and an AUR update of `z13ctl-bin` cannot change these limits. Replaces the
+z13gui overlay drawer. Works on Omarchy, Hyprland, KDE Plasma, and anything
+with a system tray.
 
 ## Features
 
@@ -17,7 +19,7 @@ Works on Omarchy, Hyprland, KDE Plasma, and anything with a system tray.
 
 **Power**
 - Plug in → Performance. Unplug → Balanced. Low battery → Quiet.
-- Four recipes plus **Custom** (28–80 W slider). Silent is the firmware-floor **32 W sustained** lock.
+- Four recipes plus **Custom** (10–80 W slider). Quiet is a real **20 W** lock. Low holds **10 W**.
 - Lock a manual pick across plug/unplug. Low battery still forces Quiet, then restores it.
 - Handheld tablet (keyboard off or tablet hinge, no TV) → Quiet. Keyboard-off to a TV keeps high power.
 - Charge limit 40–100%, re-applied at login. One-shot *charge to 100%* for this plug-in only.
@@ -47,7 +49,7 @@ Works on Omarchy, Hyprland, KDE Plasma, and anything with a system tray.
 <td width="50%" valign="top">
 
 **Desktop**
-- No KDE Run Script hooks. No PowerDevil profile wars. No `z13ctl autoswitch`.
+- No KDE Run Script hooks. No PowerDevil profile wars. No `z13ctl` daemon.
 - Follows the live Omarchy theme when one is present.
 - **Diagnose** reports hardware, permissions, daemon, and modules — with the fix.
 - Notifications on every switch, including changes from the overlay or the CLI.
@@ -62,15 +64,15 @@ Works on Omarchy, Hyprland, KDE Plasma, and anything with a system tray.
 |------|------|---------|-----------|
 | `performance` | **AC** | 75 / 92 / 93 | reset |
 | `balanced` | **Battery** | 52 / 71 / 70 | reset |
-| `silent` | **Low battery** | 28 / 32 / 45 | −20 mV |
-| `custom` | manual | 28–80 slider | reset |
-| `lowpower` | manual | firmware quiet | −25 mV |
+| `silent` | **Low battery** | 20 / 20 / 20 | −20 mV |
+| `custom` | manual | 10–80 slider | reset |
+| `lowpower` | manual | 10 | −25 mV |
 
-TDP limits are clamped at apply time against the live `z13ctl tdp --get`
-ranges, so a firmware interface change degrades instead of failing.
-BIOS 314+ (asus-armoury) caps PL1 at 80 W (`--force` above 75 W) and refuses
-anything below 28 W — the old 5–93 W asus-nb-wmi range is gone, so the 93 W
-MAX and 20 W/5 W quiet presets from earlier releases no longer exist.
+asus-armoury still refuses PL1 below 28 W. That attribute is not what the
+chip follows. This tree writes the requested watts to the SMU after the
+armoury update. On this GZ302 the package holds that limit down to **10 W**
+and no further. Quiet stays 20 W. A request under 10 W is stored and the
+chip sits near 10 W.
 
 `z13-power status` prints the live state. `z13-power settings` opens the window
 (RGB, fan, battery, Tweaks, telemetry).
@@ -139,21 +141,22 @@ z13ctl's own autoswitch only supports AC/battery.
 
 - **2025 ASUS ROG Flow Z13 (GZ302)** — these are laptop-specific values
 - Arch Linux / CachyOS (KDE Plasma 6, Hyprland, etc.)
-- AUR: [`z13ctl-bin`](https://github.com/dahui/z13ctl) (required)
+- Hardware control ships in `service/z13_power_hw.py`. It talks to
+  platform profile, asus-nb-wmi, asus-armoury, the fan curve, and the Ryzen
+  SMU (`/sys/kernel/ryzen_smu_drv`). **`z13ctl-bin` is not required.** If it
+  is installed, its user daemon is masked so it cannot write over these limits.
 - `python-pyqt6`, `python-pyudev`, `libnotify` (required — tray service + notifications)
 - `python-dbus-next` (required — non-KDE Wayland desktops serve the tray menu
   via an SNI/dbusmenu item; KDE/X11 don't use it)
 - KDE Plasma is not required — the tray service is plain Qt and works on any
   desktop. See [Desktop environments](#desktop-environments) below.
-- `ryzen_smu-dkms-git` (amkillam fork) — **required for the Tweaks undervolt
-  slider**. Paru installs it as a dependency of `z13-power-git`. It is a
-  DKMS kernel module (not baked into this repo): it must rebuild against
+- `ryzen_smu-dkms-git` (amkillam fork) — **required**. The SMU mailbox is
+  how TDP under the armoury floor and the Tweaks undervolt are applied.
+  It is a DKMS module (not baked into this repo) and must rebuild against
   your running kernel, so install the matching `-headers` package
-  (e.g. `linux-cachyos-bore-headers`). Without it, the slider still saves
-  and reapplies once the module is loaded.
-- AUR conflicts: if you already run a `z13ctl` variant (e.g. `z13ctl-plus-bin`),
-  pacman will offer to swap it for `z13ctl-bin` — that's expected and safe.
-  `z13gui-bin` is no longer needed: remove it with `paru -Rns z13gui-bin`.
+  (e.g. `linux-cachyos-bore-headers`).
+- `z13gui-bin` is no longer needed: remove it with `paru -Rns z13gui-bin`.
+  An installed `z13ctl-bin` can stay for its udev rules; this app does not run it.
 
 ## Install
 
@@ -181,10 +184,10 @@ checks):
 paru -S z13-power-git
 ```
 
-Dependencies are pulled automatically by paru (`z13ctl-bin`, `python-pyqt6`,
-`python-pyudev`, `libnotify`), and the install hook **enables + starts the tray
-service** for you — no extra commands. Installed as root (no paru)? It
-auto-starts at your next login via a user preset.
+Dependencies are pulled automatically by paru (`python-pyqt6`,
+`python-pyudev`, `libnotify`, `ryzen_smu-dkms-git`). **`z13ctl-bin` is not
+one of them.** The install hook enables and starts the tray service.
+Installed as root (no paru)? It auto-starts at your next login via a user preset.
 
 **Or from source:**
 
@@ -195,10 +198,10 @@ cd rog-z13-power-management
 ```
 
 Either path:
-1. Checks dependencies (`z13ctl`, `ryzen_smu`, `users` group)
-2. Installs `z13-power` + `z13-power-service` (to `/usr/bin` or `~/.local/bin`)
-3. Runs `sudo z13ctl setup` (udev rules + sysfs permission service) if needed
-4. Enables the `z13ctl` daemon + socket and the `z13-power-service` tray app
+1. Checks the built-in controller, `ryzen_smu`, and the `users` group
+2. Installs `z13-power`, `z13-power-service`, and `z13_power_hw.py`
+3. Leaves existing udev rules in place (it does not run `z13ctl setup`)
+4. Masks the `z13ctl` user daemon if that unit exists, and enables `z13-power-service`
 5. Deploys the PowerDevil display settings (backing up yours)
 
 Then **log out and back in** (for group changes), and verify:
@@ -208,9 +211,9 @@ z13-power diagnose
 z13-power status
 ```
 
-`z13-power diagnose` checks hardware, permissions, the daemon, and modules,
-and tells you exactly what to fix if anything's wrong (on a fresh machine
-that's usually: `sudo z13ctl setup`, then re-login for the `users` group).
+`z13-power diagnose` checks hardware, permissions, the controller, and
+modules, and tells you exactly what to fix if anything's wrong (on a fresh
+machine that's usually group membership, then a re-login).
 
 Want the Tweaks undervolt slider live on **this** kernel?
 
@@ -225,7 +228,7 @@ A tray icon should appear — click it to switch profiles manually.
 
 ## Desktop environments
 
-The service, settings window, and CLI are plain Qt/Python + z13ctl — no KDE
+The service, settings window, and CLI are plain Qt/Python — no KDE
 APIs, no PowerDevil hooks, no autoswitch. Everything runs on any desktop:
 
 - **KDE Plasma** — works out of the box. The installer also deploys a
@@ -259,7 +262,7 @@ APIs, no PowerDevil hooks, no autoswitch. Everything runs on any desktop:
   that widget is on the bar. `omarchy update` does not remove the user
   plugins; `omarchy refresh shell` can restore the stock slot — re-run
   `z13-power-omarchy-setup`. The service still writes `status.json` /
-  `command.json` so the panel never races `z13ctl`.
+  `command.json` so the panel never races the tray service.
 
 ## Configuration
 
@@ -267,7 +270,7 @@ APIs, no PowerDevil hooks, no autoswitch. Everything runs on any desktop:
 documentation; the settings window's **Profiles** tab edits it, and its
 "Open config file…" button opens the raw file). The `[service]` section
 maps power states to modes; each `[modes.<name>]` section defines exactly what
-`z13ctl` commands run for that profile:
+the controller applies for that profile:
 
 ```ini
 [service]
@@ -285,23 +288,20 @@ undervolt = reset     # reset | -1..-40 (Curve Optimizer mV)
 ```
 
 Values are validated (bad ones fall back to defaults) and reloaded
-automatically every ~30s — no service restart needed. TDP values are clamped
-into the live firmware ranges at apply time; out-of-range values cannot fail
-the mode, they just apply capped.
+automatically every ~30s — no service restart needed. The watts you set are
+written to the SMU. asus-armoury is updated too, and clamped to its own
+28/32/45 W floor when the request is lower. The package follows the SMU.
 
 ## Caveats
 
-- **BIOS 314+ caps the power interface** (asus-armoury via z13ctl ≥ 1.4.0):
-  PL1 28–80 W (75 W without `--force`), PL2 32–92 W, PL3 45–93 W. The old
-  5–93 W asus-nb-wmi range is gone — 93 W MAX and the 20 W / 5 W quiet
-  presets from earlier releases are firmware-refused and were replaced.
+- **asus-armoury cannot store PL1 below 28 W.** The SMU can. Quiet is 20 W
+  and Low is 10 W because those are the sustained limits this APU holds.
+  Below 10 W the limit register changes and the package climbs back to
+  about 10 W.
 - **Undervolt is silicon lottery.** Quiet (`-20` mV) and Low (`-25` mV) were
   stable on one GZ302. If yours crashes under load, ease off: pull the Tweaks
   slider toward 0, or change `undervolt=` in those modes (`scripts/z13-power`
   / `service.conf`) to something milder or `reset`.
-- **Don't use z13ctl's built-in autoswitch.** `z13ctl autoswitch` and the tray
-  service would both fire on power changes and race each other. Leave autoswitch
-  off: `z13ctl autoswitch --clear`
 - **Don't set per-state power profiles in your desktop's own power manager.**
   On KDE that's System Settings → Power Management → "Performance". On
   Omarchy, `z13-power-omarchy-setup` replaces the bar's Power slot with
@@ -309,8 +309,8 @@ the mode, they just apply capped.
   Keep the service as the single profile switcher.
 - The `custom` / `lowpower` modes are manual (tray menu or terminal) — they are not
   wired into any power state.
-- Requires the z13ctl **daemon** running for TDP/fancurve/undervolt persistence.
-  Check with `systemctl --user status z13ctl`.
+- The tray service reapplies TDP, fans, lighting, and undervolt. If `z13ctl`
+  is installed, its user daemon is masked so it does not write over those.
 
 ## Project layout
 
@@ -323,7 +323,8 @@ the mode, they just apply capped.
 ├── service/
 │   ├── z13-power-service   # tray icon + power profile watcher (PyQt6)
 │   ├── z13-power-settings  # settings window: RGB, fan curve, battery, Tweaks
-│   ├── z13_power_common.py # shared paths, z13ctl, battery.conf / charge cap
+│   ├── z13_power_common.py # shared paths, battery.conf / charge cap
+│   ├── z13_power_hw.py     # SMU, PPT, fans, lighting, Curve Optimizer
 │   ├── z13_power_io.py     # bounded conf I/O and helper processes
 │   └── z13-power-service.service   # systemd user unit
 ├── contrib/
@@ -338,7 +339,7 @@ the mode, they just apply capped.
 
 ## Credits
 
-- [z13ctl](https://github.com/dahui/z13ctl) — system control for the Z13
+- [z13ctl](https://github.com/dahui/z13ctl) — the upstream tool this tree no longer executes
 - This project replaces the [z13gui](https://github.com/dahui/z13gui) overlay
   drawer: profiles, RGB lighting, fan curves, battery limit, panel overdrive,
   boot sound, telemetry — all in the system tray + settings window.
