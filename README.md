@@ -19,7 +19,7 @@ with a system tray.
 
 **Power**
 - Plug in → Performance. Unplug → Balanced. Low battery → Quiet.
-- Four recipes plus **Custom** (10–80 W slider). Quiet is a real **20 W** lock. Low holds **10 W**.
+- Four recipes plus **Custom** (10–80 W slider). Quiet is a real **20 W** lock. Low is **15 W**.
 - Lock a manual pick across plug/unplug. Low battery still forces Quiet, then restores it.
 - Handheld tablet (keyboard off or tablet hinge, no TV) → Quiet. Keyboard-off to a TV keeps high power.
 - Charge limit 40–100%, re-applied at login. One-shot *charge to 100%* for this plug-in only.
@@ -66,13 +66,14 @@ with a system tray.
 | `balanced` | **Battery** | 52 / 71 / 70 | reset |
 | `silent` | **Low battery** | 20 / 20 / 20 | −20 mV |
 | `custom` | manual | 10–80 slider | reset |
-| `lowpower` | manual | 10 | −25 mV |
+| `lowpower` | manual | 15 | −25 mV |
 
 asus-armoury still refuses PL1 below 28 W. That attribute is not what the
 chip follows. This tree writes the requested watts to the SMU after the
 armoury update. On this GZ302 the package holds that limit down to **10 W**
-and no further. Quiet stays 20 W. A request under 10 W is stored and the
-chip sits near 10 W.
+and no further. Quiet stays 20 W. Low is 15 W, above that floor. 10 W
+held under load, then locked this GZ302 when the screensaver blanked
+the panel. A request under 10 W is stored and the chip sits near 10 W.
 
 `z13-power status` prints the live state. `z13-power settings` opens the window
 (RGB, fan, battery, Tweaks, telemetry).
@@ -296,7 +297,8 @@ written to the SMU. asus-armoury is updated too, and clamped to its own
 ## Caveats
 
 - **asus-armoury cannot store PL1 below 28 W.** The SMU can. Quiet is 20 W
-  and Low is 10 W because those are the sustained limits this APU holds.
+  and Low is 15 W. The chip will hold 10 W, and that floor locked this
+  machine when the screensaver blanked the panel.
   Below 10 W the limit register changes and the package climbs back to
   about 10 W.
 - **Undervolt is silicon lottery.** Quiet (`-20` mV) and Low (`-25` mV) were

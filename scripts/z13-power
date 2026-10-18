@@ -115,7 +115,7 @@ modes:
   custom [W]   TDP slider 10–80 W (default last, else 75)
   max          alias for custom 80 (firmware PL1 max; needs the forced fan floor)
   silent       balanced profile, TDP 20/20/20, undervolt -20 mV
-  lowpower     balanced profile, TDP 10 W, undervolt -25 mV
+  lowpower     balanced profile, TDP 15 W, undervolt -25 mV
   automatic    return the tray service to Automatic (per power state)
   lock         lock the current manual profile
   unlock       unlock the current profile
@@ -439,7 +439,7 @@ PY
   lowpower)
     require_z13ctl
     set_profile balanced
-    z13ctl tdp --set 10 --pl2 10 --pl3 10
+    z13ctl tdp --set 15 --pl2 15 --pl3 15
     z13ctl fancurve --reset
     apply_undervolt -25
 

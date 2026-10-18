@@ -119,7 +119,7 @@ MODE_COLORS = {
 
 DEFAULT_MODES = {
     # asus-armoury still floors PL1 at 28 W. The package follows the SMU
-    # write in z13_power_hw, so Quiet can be 20 W and Low 10 W.
+    # write in z13_power_hw. Quiet is 20 W. Low is 15 W, above the 10 W floor.
     "performance": {"profile": "performance", "tdp": "75 92 93",
                     "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
     "balanced": {"profile": "balanced", "tdp": "52 71 70",
@@ -131,8 +131,9 @@ DEFAULT_MODES = {
                "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
     "max": {"profile": "performance", "tdp": "80 92 93",
             "tdp_force": "true", "undervolt": "reset"},
-    # Same firmware-quiet problem. 10W is the lowest this APU holds under load.
-    "lowpower": {"profile": "balanced", "tdp": "10",
+    # 10 W is the silicon floor and wedged this GZ302 when the screen blanked.
+    # 15 W stays under Quiet and off that floor.
+    "lowpower": {"profile": "balanced", "tdp": "15",
                  "tdp_force": "false", "fancurve": "reset", "undervolt": "-25"},
 }
 
@@ -154,7 +155,7 @@ low_battery = 15
 # Which MODE to apply in each power state, used while the tray is on "Automatic".
 #
 # Valid modes:  performance | balanced | silent | custom | lowpower
-#   custom=10–80W slider, performance=75W, balanced=52W, silent=20W, lowpower=10W
+#   custom=10–80W slider, performance=75W, balanced=52W, silent=20W, lowpower=15W
 #   (each one is defined in a [modes.<name>] section below).
 #
 # A MODE is a complete recipe: firmware profile + TDP limits + fan curve +
@@ -253,9 +254,10 @@ fancurve = reset
 undervolt = -20
 
 [modes.lowpower]
-# Not firmware "quiet". 10W is the lowest sustained limit this APU holds.
+# Not firmware "quiet". 15W stays off the 10W floor that locked the machine
+# when the screensaver blanked the panel.
 profile = balanced
-tdp = 10
+tdp = 15
 tdp_force = false
 fancurve = reset
 undervolt = -25

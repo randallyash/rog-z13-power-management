@@ -93,7 +93,7 @@ guidance() {
   Group access:     sudo usermod -aG users "$USER"   (then log out/in)
   Settings window:  z13-power settings   (RGB lighting, fan curve, battery, power)
   Deps:             PyQt6, pyudev, libnotify. z13ctl is not required.
-  SMU:              ryzen_smu-dkms-git for 20 W Quiet, 10 W Low, and undervolt
+  SMU:              ryzen_smu-dkms-git for 20 W Quiet, 15 W Low, and undervolt
   Quiet 20W lock:   armoury PPT udev rule shipped + applied by this install
 EOF
 }

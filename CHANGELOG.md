@@ -22,7 +22,7 @@ This is for every **2025 GZ302** on Linux.
 Power limits go straight to the Ryzen SMU. `z13ctl` is not a dependency,
 and its user daemon is masked when it is installed. asus-armoury still
 floors its own attributes at 28/32/45 W. The package follows the SMU:
-Quiet is 20 W, and Low holds 10 W, which is as low as this APU will stay.
+Quiet is 20 W. Low is 15 W. The chip will sit at 10 W, and that floor locked this GZ302 when the screensaver blanked the panel.
 
 ---
 

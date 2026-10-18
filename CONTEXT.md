@@ -51,7 +51,7 @@ Packaged as `z13-power-git` in the pkgbuilds repo. License: GPL-3.0-or-later.
 | custom | TDP 10–80 from tweaks.conf `custom_tdp` (default 75); `--force` above 75 W |
 | max | alias for custom 80 (armoury PL1 max) |
 | silent | profile balanced; SMU 20/20/20; fancurve reset; undervolt -20 |
-| lowpower | profile balanced; SMU 10 W; fancurve reset; undervolt -25 |
+| lowpower | profile balanced; SMU 15 W; fancurve reset; undervolt -25 |
 | status | prints profile/tdp/fancurve/undervolt |
 | settings | opens `z13-power-settings` (lighting/fan/battery/power) |
 
@@ -65,7 +65,8 @@ asus-armoury (BIOS 314) still stores only **PL1 28–80 W**, **PL2 32–92 W**,
 `z13_power_hw.py` writes the requested watts to the Strix Halo MP1 mailbox
 (stapm `0x14`, fast `0x15`, slow `0x16`, milliwatts) after the armoury update.
 On this GZ302 the package holds that down to **10 W**. Quiet is 20 W. Low is
-10 W. A 5 W request is stored and the chip stays near 10 W.
+15 W: 10 W held under load, then locked the machine when the screensaver
+blanked the panel. A 5 W request is stored and the chip stays near 10 W.
 
 - apply_mode does **not** clamp recipes up to the armoury floor.
 - The upstream `z13ctl` user daemon is masked so it cannot put the old limits back.
