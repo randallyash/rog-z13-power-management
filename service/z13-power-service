@@ -20,7 +20,7 @@
 #     and returns when the pack is full or the charger is pulled
 #   - "Settings…": opens the settings window; its Profiles tab edits the
 #     service config ("Open config file…" exposes the raw file)
-#   - Armoury Crate button (KEY_PROG3 via z13ctl gui-toggle): toggle settings
+#   - Armoury Crate button (KEY_PROG3 on Asus WMI hotkeys): toggle settings
 #   - re-applies saved lighting and charge limit at login
 #   - notifies (notify-send) on switches; on Omarchy only plug/unplug and
 #     low-battery (the flyout already confirms clicks)
@@ -38,7 +38,6 @@ import grp
 import json
 import os
 import shutil
-import socket
 import signal as posix_signal
 import subprocess
 import sys
@@ -730,11 +729,6 @@ def _omarchy_power_panel_owns_ui():
     return False
 
 
-def z13ctl_socket_path():
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
-    return os.path.join(runtime, "z13ctl", "z13ctl.sock")
-
-
 def _proc_comm(pid):
     try:
         with open(os.path.join("/proc", str(pid), "comm")) as fh:
@@ -1091,62 +1085,25 @@ def gamescope_host_focused():
 
 
 class ButtonWatcher(QThread):
-    """Subscribe to z13ctl's Armoury Crate button (gui-toggle / KEY_PROG3).
+    """Read the Armoury side button (KEY_PROG3 on Asus WMI hotkeys).
 
-    The daemon already grabs the key; Hyprland never sees it. We listen on
-    the same Unix socket z13gui used. Reconnects if the daemon restarts.
+    The z13ctl daemon used to grab that key and emit gui-toggle. The daemon
+    is masked, so this thread reads the event device itself. It does not
+    EVIOCGRAB the node.
     """
 
     pressed = pyqtSignal()
 
     def run(self):
+        from z13_power_hw import wait_armoury_press
         while not self.isInterruptionRequested():
-            if not self._listen_once():
-                self.msleep(2000)
-
-    def _listen_once(self):
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            sock.settimeout(2)
-            sock.connect(z13ctl_socket_path())
-            sock.sendall(b'{"cmd":"subscribe","events":["gui-toggle"]}\n')
-            buf = b""
-            while b"\n" not in buf:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    return False
-                buf += chunk
-            line, buf = buf.split(b"\n", 1)
-            ack = json.loads(line.decode())
-            if not ack.get("ok"):
-                return False
-            sock.settimeout(1.0)
-            while not self.isInterruptionRequested():
-                try:
-                    chunk = sock.recv(4096)
-                except socket.timeout:
-                    continue
-                if not chunk:
-                    return True
-                buf += chunk
-                while b"\n" in buf:
-                    raw, buf = buf.split(b"\n", 1)
-                    if not raw:
-                        continue
-                    try:
-                        ev = json.loads(raw.decode())
-                    except ValueError:
-                        continue
-                    if ev.get("event") == "gui-toggle":
-                        self.pressed.emit()
-        except (OSError, ValueError, json.JSONDecodeError):
-            return False
-        finally:
             try:
-                sock.close()
-            except OSError:
-                pass
-        return True
+                hit = wait_armoury_press(self.isInterruptionRequested)
+            except Exception:
+                self.msleep(2000)
+                continue
+            if hit and not self.isInterruptionRequested():
+                self.pressed.emit()
 
 
 class PowerMonitor(QThread):

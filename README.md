@@ -107,7 +107,8 @@ chip sits near 10 W.
   above a fullscreen game. **Inside nested gamescope** (Steam, Lutris,
   Heroic, `gamescope --`) it is a clickable in-game profile picker
   (Max / Perf / Mid / Quiet / Low) — Hyprland, Plasma Wayland, and
-  X11. Uses z13ctl's `gui-toggle` event. The full settings window is
+  X11. The service reads KEY_PROG3 from `Asus WMI hotkeys` itself.
+  The full settings window is
   never opened on gamescope's Xwayland (that SIGSEGV'd).
 
 `z13-power-settings` (settings window, replaces the z13gui drawer). On
