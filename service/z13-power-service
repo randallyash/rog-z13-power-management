@@ -596,9 +596,60 @@ _cfg_mtime = None
 _cfg_cached = None
 
 
+def _lowpower_floor_text(text):
+    """Return conf text with Low raised from 10 W to 15 W, or None."""
+    section = None
+    changed = False
+    out = []
+    for line in text.splitlines(keepends=True):
+        raw = line.strip()
+        if raw.startswith("[") and raw.endswith("]") and "=" not in raw:
+            section = raw[1:-1].strip()
+        elif (section == "modes.lowpower" and raw
+              and not raw.startswith(("#", ";"))):
+            key, sep, val = raw.partition("=")
+            watts = val.split("#", 1)[0].strip()
+            if sep and key.strip() == "tdp" and watts in ("10", "10 10 10"):
+                nl = "\n" if line.endswith("\n") else ""
+                indent = line[:len(line) - len(line.lstrip(" \t"))]
+                line = f"{indent}tdp = 15{nl}"
+                changed = True
+        out.append(line)
+    if not changed:
+        return None
+    return "".join(out)
+
+
+def _raise_saved_lowpower():
+    """10 W Low locked this machine when the panel blanked. Raise saved copies."""
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as fh:
+            text = fh.read(16 * 1024 + 1)
+    except OSError:
+        return False
+    if len(text) > 16 * 1024:
+        return False
+    updated = _lowpower_floor_text(text)
+    if updated is None:
+        return False
+    try:
+        from z13_power_io import write_user_file
+        write_user_file([".config", "z13-power"], "service.conf",
+                        updated.encode("utf-8"), private_mode=0o755)
+    except Exception as exc:
+        print(f"z13-power: could not raise Low from 10W to 15W: {exc}", flush=True)
+        return False
+    print("z13-power: raised Low from 10W to 15W", flush=True)
+    return True
+
+
 def load_config(force=False):
     """Parse service.conf; reuse the last parse while mtime is unchanged."""
     global _cfg_mtime, _cfg_cached
+    if _raise_saved_lowpower():
+        force = True
+        _cfg_cached = None
+        _cfg_mtime = None
     try:
         mtime = os.path.getmtime(CONFIG_PATH)
     except OSError:
@@ -647,6 +698,9 @@ def load_config(force=False):
                 pass  # keep the default (max has no fancurve by design)
         if mode_def["profile"] not in ("quiet", "balanced", "performance"):
             mode_def["profile"] = DEFAULT_MODES[name]["profile"]
+        if name == "lowpower" and mode_def.get("tdp", "").split() in (
+                ["10"], ["10", "10", "10"]):
+            mode_def["tdp"] = "15"
         out["modes"][name] = mode_def
     _cfg_mtime = mtime
     _cfg_cached = out

@@ -298,7 +298,8 @@ written to the SMU. asus-armoury is updated too, and clamped to its own
 
 - **asus-armoury cannot store PL1 below 28 W.** The SMU can. Quiet is 20 W
   and Low is 15 W. The chip will hold 10 W, and that floor locked this
-  machine when the screensaver blanked the panel.
+  machine when the screensaver blanked the panel. A saved Low of 10 W
+  is raised to 15 W when the tray service starts.
   Below 10 W the limit register changes and the package climbs back to
   about 10 W.
 - **Undervolt is silicon lottery.** Quiet (`-20` mV) and Low (`-25` mV) were
