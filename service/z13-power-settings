@@ -88,7 +88,6 @@ MODE_OPTIONS = [
     ("balanced", "Balanced"),
     ("silent", "Quiet"),
     ("custom", "Custom"),
-    ("lowpower", "Low power"),
 ]
 VALID_MODES = [m[0] for m in MODE_OPTIONS]
 

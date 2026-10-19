@@ -437,11 +437,8 @@ PY
 
     ;;
   lowpower)
-    require_z13ctl
-    set_profile balanced
-    z13ctl tdp --set 15 --pl2 15 --pl3 15
-    z13ctl fancurve --reset
-    apply_undervolt -25
+    # Retired. 15 W sits under the floor that froze this machine.
+    exec "$0" silent
 
     ;;
   automatic)
