@@ -119,13 +119,14 @@ MODE_COLORS = {
 
 DEFAULT_MODES = {
     # asus-armoury still floors PL1 at 28 W. The package follows the SMU
-    # write in z13_power_hw. Quiet is 20 W. Low is 15 W, above the 10 W floor.
+    # write in z13_power_hw. Quiet is that 28 W floor. Low is 15 W.
     "performance": {"profile": "performance", "tdp": "75 92 93",
                     "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
     "balanced": {"profile": "balanced", "tdp": "52 71 70",
                  "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
-    # Firmware "quiet" pins SMU ~40W and ignores PPT. Balanced + 20W.
-    "silent": {"profile": "balanced", "tdp": "20 20 20",
+    # Firmware "quiet" pins SMU ~40W and ignores PPT. 20 W froze this
+    # GZ302 while browsing, so Quiet sits on the 28 W armoury floor.
+    "silent": {"profile": "balanced", "tdp": "28 28 28",
                "tdp_force": "false", "fancurve": "reset", "undervolt": "-20"},
     "custom": {"profile": "performance", "tdp": "75 75 75",
                "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
@@ -155,7 +156,7 @@ low_battery = 15
 # Which MODE to apply in each power state, used while the tray is on "Automatic".
 #
 # Valid modes:  performance | balanced | silent | custom | lowpower
-#   custom=10–80W slider, performance=75W, balanced=52W, silent=20W, lowpower=15W
+#   custom=10–80W slider, performance=75W, balanced=52W, silent=28W, lowpower=15W
 #   (each one is defined in a [modes.<name>] section below).
 #
 # A MODE is a complete recipe: firmware profile + TDP limits + fan curve +
@@ -247,8 +248,9 @@ undervolt = reset
 
 [modes.silent]
 # Not firmware "quiet": that profile pins ~40W and ignores PPT.
+# 20W froze this GZ302 while browsing. 28W is the armoury PL1 floor.
 profile = balanced
-tdp = 20 20 20
+tdp = 28 28 28
 tdp_force = false
 fancurve = reset
 undervolt = -20
@@ -596,23 +598,27 @@ _cfg_mtime = None
 _cfg_cached = None
 
 
-def _lowpower_floor_text(text):
-    """Return conf text with Low raised from 10 W to 15 W, or None."""
+def _saved_preset_text(text):
+    """Raise a saved Low of 10 W to 15 W, and a saved Quiet of 20 W to 28 W."""
     section = None
     changed = False
     out = []
+    lifts = {
+        "modes.lowpower": (("10", "10 10 10"), "15"),
+        "modes.silent": (("20", "20 20 20"), "28 28 28"),
+    }
     for line in text.splitlines(keepends=True):
         raw = line.strip()
         if raw.startswith("[") and raw.endswith("]") and "=" not in raw:
             section = raw[1:-1].strip()
-        elif (section == "modes.lowpower" and raw
-              and not raw.startswith(("#", ";"))):
+        elif section in lifts and raw and not raw.startswith(("#", ";")):
             key, sep, val = raw.partition("=")
             watts = val.split("#", 1)[0].strip()
-            if sep and key.strip() == "tdp" and watts in ("10", "10 10 10"):
+            old, new = lifts[section]
+            if sep and key.strip() == "tdp" and watts in old:
                 nl = "\n" if line.endswith("\n") else ""
                 indent = line[:len(line) - len(line.lstrip(" \t"))]
-                line = f"{indent}tdp = 15{nl}"
+                line = f"{indent}tdp = {new}{nl}"
                 changed = True
         out.append(line)
     if not changed:
@@ -620,8 +626,8 @@ def _lowpower_floor_text(text):
     return "".join(out)
 
 
-def _raise_saved_lowpower():
-    """10 W Low locked this machine when the panel blanked. Raise saved copies."""
+def _raise_saved_presets():
+    """Lift saved copies of the presets that froze this GZ302."""
     try:
         with open(CONFIG_PATH, encoding="utf-8") as fh:
             text = fh.read(16 * 1024 + 1)
@@ -629,7 +635,7 @@ def _raise_saved_lowpower():
         return False
     if len(text) > 16 * 1024:
         return False
-    updated = _lowpower_floor_text(text)
+    updated = _saved_preset_text(text)
     if updated is None:
         return False
     try:
@@ -637,16 +643,16 @@ def _raise_saved_lowpower():
         write_user_file([".config", "z13-power"], "service.conf",
                         updated.encode("utf-8"), private_mode=0o755)
     except Exception as exc:
-        print(f"z13-power: could not raise Low from 10W to 15W: {exc}", flush=True)
+        print(f"z13-power: could not raise a frozen preset: {exc}", flush=True)
         return False
-    print("z13-power: raised Low from 10W to 15W", flush=True)
+    print("z13-power: raised a saved Low of 10W to 15W or Quiet of 20W to 28W", flush=True)
     return True
 
 
 def load_config(force=False):
     """Parse service.conf; reuse the last parse while mtime is unchanged."""
     global _cfg_mtime, _cfg_cached
-    if _raise_saved_lowpower():
+    if _raise_saved_presets():
         force = True
         _cfg_cached = None
         _cfg_mtime = None
@@ -701,6 +707,9 @@ def load_config(force=False):
         if name == "lowpower" and mode_def.get("tdp", "").split() in (
                 ["10"], ["10", "10", "10"]):
             mode_def["tdp"] = "15"
+        if name == "silent" and mode_def.get("tdp", "").split() in (
+                ["20"], ["20", "20", "20"]):
+            mode_def["tdp"] = "28 28 28"
         out["modes"][name] = mode_def
     _cfg_mtime = mtime
     _cfg_cached = out

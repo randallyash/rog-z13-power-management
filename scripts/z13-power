@@ -431,7 +431,7 @@ PY
   silent)
     require_z13ctl
     set_profile balanced
-    z13ctl tdp --set 20 --pl2 20 --pl3 20
+    z13ctl tdp --set 28 --pl2 28 --pl3 28
     z13ctl fancurve --reset
     apply_undervolt -20
 
