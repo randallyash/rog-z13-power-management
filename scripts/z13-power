@@ -114,7 +114,7 @@ modes:
   performance  performance profile, TDP 75/92/93, fan curve reset, undervolt reset
   custom [W]   TDP slider 10–80 W (default last, else 75)
   max          alias for custom 80 (firmware PL1 max; needs the forced fan floor)
-  silent       firmware quiet profile, no SMU cap, undervolt reset
+  silent       firmware quiet, armoury 28/32/45, no SMU write, undervolt reset
   lowpower     retired; same as silent
   automatic    return the tray service to Automatic (per power state)
   lock         lock the current manual profile
@@ -125,7 +125,7 @@ modes:
   settings     open the settings window (lighting, fan curve, battery, power)
   diagnose     check z13 setup (hardware, perms, daemon, modules) and show fixes
   setup-undervolt  install kernel headers for THIS kernel + ryzen_smu (DKMS)
-  version      print z13-power 1.4.0
+  version      print z13-power 1.4.1
   help         show this message
 EOF
 }
@@ -515,6 +515,7 @@ PY
   silent)
     require_z13ctl
     set_profile quiet
+    z13ctl tdp --set 28 --pl2 32 --pl3 45 --no-smu
     z13ctl fancurve --reset
     reset_undervolt
     ;;
@@ -560,7 +561,7 @@ PY
     diagnose
     ;;
   version|--version)
-    echo "z13-power 1.4.0"
+    echo "z13-power 1.4.1"
     ;;
   setup-undervolt)
     setup_undervolt

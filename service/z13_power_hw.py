@@ -29,7 +29,7 @@ from types import SimpleNamespace
 
 from z13_power_io import sys_read, sys_write
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 
 WMI_PPT = "/sys/devices/platform/asus-nb-wmi"
 ARMOURY = "/sys/class/firmware-attributes/asus-armoury/attributes"
@@ -167,7 +167,7 @@ def read_pl() -> tuple[int | None, int | None, int | None]:
     )
 
 
-def write_tdp(pl1: int, pl2: int, pl3: int, *, force: bool) -> SimpleNamespace:
+def write_tdp(pl1: int, pl2: int, pl3: int, *, force: bool, smu: bool = True) -> SimpleNamespace:
     if not (TDP_ABS_MIN <= pl1 <= TDP_ABS_MAX):
         return result(1, err=f"PL1 {pl1}W out of range {TDP_ABS_MIN}–{TDP_ABS_MAX}")
     for label, val in (("PL2", pl2), ("PL3", pl3)):
@@ -217,7 +217,10 @@ def write_tdp(pl1: int, pl2: int, pl3: int, *, force: bool) -> SimpleNamespace:
             armoury_ok = True
     if not wmi_ok and not armoury_ok:
         return result(1, err="PPT write failed")
-    notes.extend(_smu_ppt(pl1, pl2, pl3))
+    # Quiet passes smu=False. The EC applies the armoury write itself.
+    # A second mailbox write from this process froze this GZ302.
+    if smu:
+        notes.extend(_smu_ppt(pl1, pl2, pl3))
     text = f"TDP {pl1}/{pl2}/{pl3}W"
     if notes:
         text += " (" + "; ".join(notes) + ")"
@@ -333,8 +336,9 @@ def cmd_tdp(argv: list[str]) -> SimpleNamespace:
         ]
         return result(0, out="\n".join(lines) + "\n")
     if "--set" not in argv:
-        return result(1, err="usage: tdp --get | --set WATTS [--pl2 W --pl3 W] [--force]")
+        return result(1, err="usage: tdp --get | --set WATTS [--pl2 W --pl3 W] [--force] [--no-smu]")
     force = "--force" in argv
+    smu = "--no-smu" not in argv
     try:
         set_at = argv.index("--set")
         pl1 = int(argv[set_at + 1])
@@ -357,7 +361,7 @@ def cmd_tdp(argv: list[str]) -> SimpleNamespace:
             pl1 = _opt("--pl1", pl1)
     except ValueError as exc:
         return result(1, err=f"bad {exc.args[0]}")
-    return write_tdp(pl1, pl2, pl3, force=force)
+    return write_tdp(pl1, pl2, pl3, force=force, smu=smu)
 
 
 def cmd_fancurve(argv: list[str]) -> SimpleNamespace:

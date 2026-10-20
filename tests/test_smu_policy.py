@@ -41,6 +41,10 @@ def main() -> None:
     access = open(os.path.join(ROOT, "contrib/udev/99-z13power-access.rules"), encoding="utf-8").read()
     check("access rule is not group users", 'GROUP="users"' not in access and "chgrp users" not in access)
     check("access rule uses z13-power", 'GROUP="z13-power"' in access)
+    service = open(os.path.join(ROOT, "service/z13-power-service"), encoding="utf-8").read()
+    check("quiet recipe is the bios floor", 'QUIET_TDP = "28 32 45"' in service)
+    check("quiet apply skips the mailbox", '--no-smu' in service and "smu=(profile != \"quiet\")" in service)
+    check("cli quiet skips the mailbox", "tdp --set 28 --pl2 32 --pl3 45 --no-smu" in script)
     print("smu policy tests passed")
 
 

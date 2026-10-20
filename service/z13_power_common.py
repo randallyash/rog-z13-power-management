@@ -393,7 +393,7 @@ def read_wmi_pl1():
         return None
 
 
-def write_armoury_ppt(pl1, pl2=None, pl3=None):
+def write_armoury_ppt(pl1, pl2=None, pl3=None, smu=True):
     """Write the PPT the SMU actually uses. Clamp to BIOS min/max.
 
     Raw sysfs is not enough: asusd caches Armoury defaults (60/75/86) and
@@ -421,6 +421,8 @@ def write_armoury_ppt(pl1, pl2=None, pl3=None):
         if current is None or current.strip() != str(val):
             sys_write(path, str(val))
             run_helper(["asusctl", "armoury", "set", name, str(val)], timeout=5.0)
+    if not smu:
+        return
     from z13_power_hw import _smu_ppt
     _smu_ppt(pl1, int(pl2), int(pl3))
 

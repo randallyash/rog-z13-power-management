@@ -19,7 +19,7 @@ with a system tray.
 
 **Power**
 - Plug in → Performance. Unplug → Balanced. Low battery → Quiet.
-- Three recipes plus **Custom** (45–80 W slider). Quiet is the firmware **quiet** profile. It does not pin the SMU. The Low preset is gone.
+- Three recipes plus **Custom** (45–80 W slider). Quiet is firmware **quiet** plus armoury 28/32/45. It does not write the SMU mailbox. The Low preset is gone.
 - Lock a manual pick across plug/unplug. Low battery still forces Quiet, then restores it.
 - Handheld tablet (keyboard off or tablet hinge, no TV) → Quiet. Keyboard-off to a TV keeps high power.
 - Charge limit 40–100%, re-applied at login. One-shot *charge to 100%* for this plug-in only.
@@ -64,14 +64,15 @@ with a system tray.
 |------|------|---------|-----------|
 | `performance` | **AC** | 75 / 92 / 93 | reset |
 | `balanced` | **Battery** | 52 / 71 / 70 | reset |
-| `silent` | **Low battery** | firmware quiet | reset |
+| `silent` | **Low battery** | 28 / 32 / 45, firmware quiet | reset |
 | `custom` | manual | 10–80 slider | reset |
 | `lowpower` | retired | same as Quiet | — |
 
-asus-armoury still refuses PL1 below 28 W. Quiet does not use that path.
-It selects the firmware quiet profile and leaves the package limit alone.
-Pinning the SMU at 10 W, 20 W, or 28 W hard-froze this GZ302, including
-with the panel idle. The Low preset is retired.
+Quiet is the firmware quiet profile plus the BIOS power floor: 28 W
+sustained, 32 W boost, 45 W peak, written through asus-armoury. The EC
+carries that into the SMU. This program does not write the mailbox on
+Quiet. Direct mailbox caps at 10 W, 20 W, and 28 W hard-froze this GZ302.
+The Low preset is retired.
 
 `z13-power status` prints the live state. `z13-power settings` opens the window
 (RGB, fan, battery, Tweaks, telemetry).
@@ -297,8 +298,9 @@ written to the SMU. asus-armoury is updated too, and clamped to its own
 
 ## Caveats
 
-- **Quiet does not pin the SMU.** Firmware quiet owns that limit. SMU caps
-  at 10 W, 20 W, and 28 W, plus a Quiet undervolt, hard-froze this GZ302.
+- **Quiet does not write the SMU mailbox.** It sets firmware quiet and the
+  BIOS floor 28/32/45 through asus-armoury. Mailbox caps at 10 W, 20 W, and
+  28 W, plus a Quiet undervolt, hard-froze this GZ302.
   `lowpower` and a low-battery setting of `lowpower` apply Quiet.
   The custom slider floors at 45 W. The helper refuses a package limit under 45 W.
 - **Undervolt is silicon lottery.** Quiet no longer applies one. If a custom

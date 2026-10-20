@@ -117,23 +117,25 @@ MODE_COLORS = {
     "lowpower": "#ffd23f",
 }
 
+# BIOS armoury floor. Sustained, boost, peak. Below Balanced's 52/71/70.
+# Written to armoury only. The mailbox is not touched on this preset.
+QUIET_TDP = "28 32 45"
+
 DEFAULT_MODES = {
-    # asus-armoury floors PL1 at 28 W. Quiet does not fight that with the
-    # SMU mailbox: 10 W, 20 W, and 28 W caps all hard-froze this GZ302.
     "performance": {"profile": "performance", "tdp": "75 92 93",
                     "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
     "balanced": {"profile": "balanced", "tdp": "52 71 70",
                  "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
-    # Firmware quiet owns the package limit (~40 W). Empty tdp means
-    # do not write PPT or the SMU. No curve optimizer on this preset.
-    "silent": {"profile": "quiet", "tdp": "",
+    # Firmware quiet for the fans, plus the BIOS power floor above.
+    # No curve optimizer. No SMU mailbox write.
+    "silent": {"profile": "quiet", "tdp": QUIET_TDP,
                "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
     "custom": {"profile": "performance", "tdp": "75 75 75",
                "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
     "max": {"profile": "performance", "tdp": "80 92 93",
             "tdp_force": "true", "undervolt": "reset"},
     # Kept so an old config section cannot apply 15 W. apply() sends it to Quiet.
-    "lowpower": {"profile": "quiet", "tdp": "",
+    "lowpower": {"profile": "quiet", "tdp": QUIET_TDP,
                  "tdp_force": "false", "fancurve": "reset", "undervolt": "reset"},
 }
 
@@ -155,7 +157,7 @@ low_battery = 15
 # Which MODE to apply in each power state, used while the tray is on "Automatic".
 #
 # Valid modes:  performance | balanced | silent | custom | lowpower
-#   custom=28–80W slider, performance=75W, balanced=52W, silent=firmware quiet
+#   custom=45–80W slider, performance=75W, balanced=52W, silent=28/32/45 quiet
 #   (each one is defined in a [modes.<name>] section below).
 #
 # A MODE is a complete recipe: firmware profile + TDP limits + fan curve +
@@ -188,14 +190,12 @@ on_tablet = silent
 #  tdp         TDP (Package Power Tracking) power limits, in watts.
 #                One number  -> all limits set to it,      e.g.  tdp = 93
 #                Three       -> PL1 PL2 PL3,               e.g.  tdp = 75 92 93
-#                Empty       -> skip the TDP write entirely (lowpower: the
-#                               firmware quiet profile manages its own limits).
+#                Empty       -> Quiet fills this in with 28 32 45.
 #              PL1 = sustained (long-term) power cap.
 #              PL2 = boost / short-burst power cap.
 #              PL3 = peak / emergency burst cap.
-#              The package follows the Ryzen SMU, not the asus-armoury
-#              floor (PL1 28 / PL2 32 / PL3 45). Quiet is 20 W. Low holds
-#              10 W, which is as low as this APU stays under load.
+#              Quiet is firmware quiet plus the BIOS floor 28/32/45, written
+#              through asus-armoury. It does not write the SMU mailbox.
 #              PL1 above 75 W needs tdp_force (armoury PL1 tops out at 80).
 #
 #  tdp_force   true  -> allow PL1 above 75 W, up to the hardware max (80 W;
@@ -246,9 +246,10 @@ fancurve = reset
 undervolt = reset
 
 [modes.silent]
-# Firmware quiet. Do not pin the SMU: 10 W, 20 W, and 28 W all froze this GZ302.
+# Firmware quiet fans. Power floor is the BIOS minimum: 28 sustained,
+# 32 boost, 45 peak. Armoury only. The SMU mailbox is not written.
 profile = quiet
-tdp =
+tdp = 28 32 45
 tdp_force = false
 fancurve = reset
 undervolt = reset
@@ -256,7 +257,7 @@ undervolt = reset
 [modes.lowpower]
 # Retired. apply() remaps this name to silent.
 profile = quiet
-tdp =
+tdp = 28 32 45
 tdp_force = false
 fancurve = reset
 undervolt = reset
@@ -372,9 +373,11 @@ def apply_mode(mode_def, force=False):
                 return False, err
             if tdp_force:
                 wait_profile_settle(profile)
-    # Empty tdp leaves the firmware profile in charge. Quiet uses that so
-    # we do not write the SMU mailbox (those writes froze this GZ302).
+    # Quiet with a blank recipe still gets the BIOS floor. The write goes
+    # through armoury. --no-smu keeps this process off the mailbox.
     tdp = str(mode_def.get("tdp", "")).strip()
+    if profile == "quiet" and not tdp:
+        tdp = QUIET_TDP
     if tdp:
         parts = tdp.split()
         try:
@@ -397,13 +400,15 @@ def apply_mode(mode_def, force=False):
             args += [str(pl1), "--pl2", str(pl2), "--pl3", str(pl3)]
         if tdp_force:
             args.append("--force")
+        if profile == "quiet":
+            args.append("--no-smu")
         if force or args != _last_tdp_args:
             ok, err = z13ctl_err(args)
             if not ok:
                 return False, err
             _last_tdp_args = args
             write_wmi_ppt(pl1, pl2, pl3)
-            write_armoury_ppt(pl1, pl2, pl3)
+            write_armoury_ppt(pl1, pl2, pl3, smu=(profile != "quiet"))
     # Fan curve: only touched if the mode defines one (max omits it — reset
     # is refused above 75W PL1, where --force installs its own safety curve).
     # Skip --reset when the firmware profile was already ours and fans are
@@ -626,8 +631,8 @@ def _saved_preset_text(text):
             if sep and field == "profile" and body == "balanced":
                 line = f"{indent}profile = quiet{nl}"
                 changed = True
-            elif sep and field == "tdp" and body in _FROZEN_TDP:
-                line = f"{indent}tdp ={nl}"
+            elif sep and field == "tdp" and (body in _FROZEN_TDP or body == ""):
+                line = f"{indent}tdp = {QUIET_TDP}{nl}"
                 changed = True
             elif sep and field == "undervolt" and body in ("-20", "-25"):
                 line = f"{indent}undervolt = reset{nl}"
@@ -657,7 +662,7 @@ def _raise_saved_presets():
     except Exception as exc:
         print(f"z13-power: could not raise a frozen preset: {exc}", flush=True)
         return False
-    print("z13-power: Quiet now uses firmware quiet and does not pin the SMU", flush=True)
+    print("z13-power: Quiet is armoury 28/32/45 and does not write the SMU", flush=True)
     return True
 
 
@@ -717,11 +722,12 @@ def load_config(force=False):
         if mode_def["profile"] not in ("quiet", "balanced", "performance"):
             mode_def["profile"] = DEFAULT_MODES[name]["profile"]
         if name in ("silent", "lowpower"):
-            frozen = mode_def.get("tdp", "").strip() in _FROZEN_TDP
+            saved = mode_def.get("tdp", "").strip()
+            frozen = saved in _FROZEN_TDP or saved == ""
             uv = str(mode_def.get("undervolt", "")).strip()
             if mode_def.get("profile") == "balanced" or frozen or uv in ("-20", "-25"):
                 mode_def["profile"] = "quiet"
-                mode_def["tdp"] = ""
+                mode_def["tdp"] = QUIET_TDP
                 mode_def["undervolt"] = "reset"
                 mode_def["tdp_force"] = "false"
         out["modes"][name] = mode_def
