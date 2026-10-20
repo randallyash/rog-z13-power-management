@@ -29,7 +29,7 @@ from types import SimpleNamespace
 
 from z13_power_io import sys_read, sys_write
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 WMI_PPT = "/sys/devices/platform/asus-nb-wmi"
 ARMOURY = "/sys/class/firmware-attributes/asus-armoury/attributes"
@@ -37,9 +37,10 @@ PROFILE_GLOB = "/sys/class/platform-profile/*/profile"
 CHARGE_PATH = "/sys/class/power_supply/BAT0/charge_control_end_threshold"
 SMU = "/sys/kernel/ryzen_smu_drv"
 SMU_SOCK = "/run/z13-power/smu.sock"
-# Helper policy. Below 28 W froze this GZ302, and PL1 above 80 W is outside
-# the armoury ceiling this machine actually runs. Fast may reach PL3's 93 W.
-SMU_PPT_MIN_W = 28
+# Helper policy. 10 W, 20 W, and 28 W froze this GZ302. 45 W is AMD's
+# published cTDP floor. PL1 above 80 W is outside the armoury ceiling.
+# Fast may reach PL3's 93 W.
+SMU_PPT_MIN_W = 45
 SMU_PPT_PL1_MAX_W = 80
 SMU_PPT_FAST_MAX_W = 93
 CO_STATE = os.path.expanduser("~/.local/state/z13-power/co")
@@ -437,7 +438,7 @@ def parse_smu_request(line: str) -> tuple[str, tuple[int, ...]] | str:
 def _smu_ppt(pl1: int, pl2: int, pl3: int) -> list[str]:
     """Ask the root helper for the limits the APU follows.
 
-    The mailbox is root-only. Requests under 28 W are refused. Quiet does
+    The mailbox is root-only. Requests under 45 W are refused. Quiet does
     not call this. A retry covers the EC applying an armoury write late.
     """
     global _ppt_gen, _ppt_retry

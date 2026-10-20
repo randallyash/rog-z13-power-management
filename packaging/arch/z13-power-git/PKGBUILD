@@ -88,5 +88,11 @@ package() {
   # at install+upgrade by z13-power-git.install, mirroring install.sh.
   install -Dm644 contrib/udev/99-z13-power-armoury-ppt.rules \
     "$pkgdir/usr/lib/udev/rules.d/99-z13-power-armoury-ppt.rules"
+  install -Dm644 contrib/udev/99-z13power-access.rules \
+    "$pkgdir/usr/lib/udev/rules.d/99-z13power-access.rules"
+  install -Dm755 contrib/z13-power/lock-power-sysfs \
+    "$pkgdir/usr/lib/z13-power/lock-power-sysfs"
+  install -Dm644 service/z13-power-perms.service \
+    "$pkgdir/usr/lib/systemd/system/z13-power-perms.service"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/z13-power-git/LICENSE"
 }

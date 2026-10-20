@@ -1,0 +1,11 @@
+# Sort after 99-z13ctl.rules. That file grants group users, including the
+# raw SMU mailbox via z13ctl-perms.service. This puts the session devices
+# in group z13-power. The mailbox stays root-only (lock-smu-sysfs).
+ACTION=="add", SUBSYSTEM=="firmware-attributes", KERNEL=="asus-armoury", RUN+="/usr/lib/z13-power/lock-power-sysfs"
+ACTION=="add", SUBSYSTEM=="platform", KERNEL=="asus-nb-wmi", RUN+="/usr/lib/z13-power/lock-power-sysfs"
+ACTION=="add", SUBSYSTEM=="platform-profile", RUN+="/usr/lib/z13-power/lock-power-sysfs"
+ACTION=="add", SUBSYSTEM=="hwmon", ATTR{name}=="asus_custom_fan_curve", RUN+="/usr/lib/z13-power/lock-power-sysfs"
+ACTION=="add", SUBSYSTEM=="hwmon", ATTR{name}=="asus", RUN+="/usr/lib/z13-power/lock-power-sysfs"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="18c6", MODE="0660", GROUP="z13-power"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="1a30", MODE="0660", GROUP="z13-power"
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Asus WMI hotkeys", MODE="0660", GROUP="z13-power"

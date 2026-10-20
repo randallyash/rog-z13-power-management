@@ -55,16 +55,22 @@ deploy_smu_lock() {
   fi
   systemctl daemon-reload >/dev/null 2>&1 || true
   systemctl enable --now z13-power-smu.socket >/dev/null 2>&1 || true
+  systemctl enable --now z13-power-perms.service >/dev/null 2>&1 || true
+  if [ -f /etc/systemd/system/z13ctl-perms.service ] && [ ! -L /etc/systemd/system/z13ctl-perms.service ]; then
+    systemctl disable --now z13ctl-perms.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/z13ctl-perms.service
+  fi
+  systemctl mask --now z13ctl-perms.service >/dev/null 2>&1 || true
+  if [ -x /usr/lib/z13-power/lock-power-sysfs ]; then
+    /usr/lib/z13-power/lock-power-sysfs "${SUDO_USER:-}" || true
+  fi
 }
 
 deploy_armoury_ppt() {
   udevadm control --reload-rules >/dev/null 2>&1 || true
-  for a in ppt_pl1_spl ppt_pl2_sppt ppt_pl3_fppt; do
-    f="/sys/class/firmware-attributes/asus-armoury/attributes/$a/current_value"
-    [ -e "$f" ] || continue
-    chgrp users "$f" >/dev/null 2>&1 || true
-    chmod g+w "$f" >/dev/null 2>&1 || true
-  done
+  if [ -x /usr/lib/z13-power/lock-power-sysfs ]; then
+    /usr/lib/z13-power/lock-power-sysfs "${SUDO_USER:-}" || true
+  fi
 }
 
 stop_service() {

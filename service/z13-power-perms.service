@@ -1,0 +1,12 @@
+[Unit]
+Description=z13-power sysfs permissions
+After=z13ctl-perms.service
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/z13-power/lock-power-sysfs
+
+[Install]
+WantedBy=multi-user.target

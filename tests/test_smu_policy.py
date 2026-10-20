@@ -19,10 +19,11 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 def main() -> None:
-    check("quiet ppt floor", parse_smu_request("ppt 28 28 28") == ("ppt", (28, 28, 28)))
+    check("ppt floor 45", parse_smu_request("ppt 45 45 45") == ("ppt", (45, 45, 45)))
     check("perf fast", parse_smu_request("ppt 75 93 75") == ("ppt", (75, 93, 75)))
     check("reject 10W", isinstance(parse_smu_request("ppt 10 10 10"), str))
     check("reject 20W", isinstance(parse_smu_request("ppt 20 20 20"), str))
+    check("reject 28W", isinstance(parse_smu_request("ppt 28 32 28"), str))
     check("reject 27W", isinstance(parse_smu_request("ppt 27 32 27"), str))
     check("reject pl1 93", isinstance(parse_smu_request("ppt 93 93 93"), str))
     check("co -20", parse_smu_request("co -20") == ("co", (-20,)))
@@ -37,6 +38,9 @@ def main() -> None:
     check("udev locks via helper script", "lock-smu-sysfs" in rule)
     script = open(os.path.join(ROOT, "scripts/z13-power"), encoding="utf-8").read()
     check("setup-undervolt does not chmod a+w", "chmod a+w" not in script)
+    access = open(os.path.join(ROOT, "contrib/udev/99-z13power-access.rules"), encoding="utf-8").read()
+    check("access rule is not group users", 'GROUP="users"' not in access and "chgrp users" not in access)
+    check("access rule uses z13-power", 'GROUP="z13-power"' in access)
     print("smu policy tests passed")
 
 

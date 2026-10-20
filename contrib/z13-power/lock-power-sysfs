@@ -1,0 +1,63 @@
+#!/bin/sh
+# Session power files belong to group z13-power, mode 0660.
+# The SMU mailbox is not one of them. lock-smu-sysfs keeps that root-only.
+# An optional username becomes the owner so that login can write before
+# it picks up group z13-power. Sysfs does not support ACLs.
+set -u
+owner="${1:-}"
+lock=/usr/lib/z13-power/lock-smu-sysfs
+[ -x "$lock" ] && "$lock"
+
+grant() {
+  [ -e "$1" ] || return 0
+  if [ -n "$owner" ] && [ "$owner" != root ]; then
+    chown "$owner:z13-power" "$1" || return 1
+  else
+    chgrp z13-power "$1" || return 1
+  fi
+  chmod 0660 "$1" || return 1
+}
+
+for a in ppt_pl1_spl ppt_pl2_sppt ppt_pl3_fppt boot_sound panel_overdrive; do
+  grant "/sys/class/firmware-attributes/asus-armoury/attributes/$a/current_value"
+done
+for f in /sys/devices/platform/asus-nb-wmi/ppt_*; do
+  grant "$f"
+done
+for f in /sys/class/platform-profile/*/profile; do
+  grant "$f"
+done
+for f in /sys/class/power_supply/BAT*/charge_control_end_threshold; do
+  grant "$f"
+done
+for hw in /sys/class/hwmon/hwmon*; do
+  [ -r "$hw/name" ] || continue
+  name=$(cat "$hw/name" 2>/dev/null || true)
+  case "$name" in
+    asus_custom_fan_curve)
+      for f in "$hw"/pwm*; do
+        grant "$f"
+      done
+      ;;
+    asus)
+      for f in "$hw"/pwm*_enable; do
+        grant "$f"
+      done
+      ;;
+  esac
+done
+for dev in /sys/class/hidraw/hidraw*; do
+  uevent=$(cat "$dev/device/uevent" 2>/dev/null || true)
+  case "$uevent" in
+    *18[Cc]6*|*1[Aa]30*)
+      grant "/dev/$(basename "$dev")"
+      ;;
+  esac
+done
+for ev in /sys/class/input/event*; do
+  name=$(cat "$ev/device/name" 2>/dev/null || true)
+  if [ "$name" = "Asus WMI hotkeys" ]; then
+    grant "/dev/input/$(basename "$ev")"
+  fi
+done
+exit 0

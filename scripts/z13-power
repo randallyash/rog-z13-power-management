@@ -125,7 +125,7 @@ modes:
   settings     open the settings window (lighting, fan curve, battery, power)
   diagnose     check z13 setup (hardware, perms, daemon, modules) and show fixes
   setup-undervolt  install kernel headers for THIS kernel + ryzen_smu (DKMS)
-  version      print z13-power 1.3.0
+  version      print z13-power 1.4.0
   help         show this message
 EOF
 }
@@ -224,9 +224,45 @@ install_smu_helper() {
   if [[ -n "$who" && "$who" != "root" ]]; then
     sudo usermod -aG z13-power "$who"
   fi
-  sudo /usr/lib/z13-power/lock-smu-sysfs
+  local access="" perms_unit=""
+  for access in \
+      "$src/lock-power-sysfs" \
+      "$src/../contrib/z13-power/lock-power-sysfs" \
+      /usr/share/z13-power-management/contrib/z13-power/lock-power-sysfs \
+      /usr/lib/z13-power/lock-power-sysfs; do
+    [[ -f "$access" ]] && break
+    access=""
+  done
+  [[ -n "$access" ]] || die "lock-power-sysfs is missing"
+  sudo install -m755 "$access" /usr/lib/z13-power/lock-power-sysfs
+  for access in \
+      "$src/../contrib/udev/99-z13power-access.rules" \
+      "$src/99-z13power-access.rules" \
+      /usr/share/z13-power-management/contrib/udev/99-z13power-access.rules; do
+    if [[ -f "$access" ]]; then
+      sudo install -Dm644 "$access" /etc/udev/rules.d/99-z13power-access.rules
+      sudo install -Dm644 "$access" /usr/lib/udev/rules.d/99-z13power-access.rules
+      break
+    fi
+  done
+  for perms_unit in \
+      "$src/z13-power-perms.service" \
+      "$src/../service/z13-power-perms.service" \
+      /usr/share/z13-power-management/z13-power-perms.service; do
+    if [[ -f "$perms_unit" ]]; then
+      sudo install -m644 "$perms_unit" /usr/lib/systemd/system/z13-power-perms.service
+      break
+    fi
+  done
+  sudo /usr/lib/z13-power/lock-power-sysfs "$who"
   sudo systemctl daemon-reload
   sudo systemctl enable --now z13-power-smu.socket
+  sudo systemctl enable --now z13-power-perms.service
+  if [[ -f /etc/systemd/system/z13ctl-perms.service && ! -L /etc/systemd/system/z13ctl-perms.service ]]; then
+    sudo systemctl disable --now z13ctl-perms.service >/dev/null 2>&1 || true
+    sudo rm -f /etc/systemd/system/z13ctl-perms.service
+  fi
+  sudo systemctl mask --now z13ctl-perms.service >/dev/null 2>&1 || true
 }
 
 setup_undervolt() {
@@ -429,7 +465,7 @@ case "${1:-}" in
     require_z13ctl
     watts="${2:-}"
     if [[ -n "$watts" && ! "$watts" =~ ^[0-9]+$ ]]; then
-      die "custom TDP must be an integer 10–80"
+      die "custom TDP must be an integer 45–80"
     fi
     if [[ -n "$watts" ]]; then
       python3 - <<PY
@@ -524,7 +560,7 @@ PY
     diagnose
     ;;
   version|--version)
-    echo "z13-power 1.3.0"
+    echo "z13-power 1.4.0"
     ;;
   setup-undervolt)
     setup_undervolt

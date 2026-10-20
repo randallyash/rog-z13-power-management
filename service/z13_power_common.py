@@ -29,8 +29,8 @@ LIGHTING_PATH = os.path.expanduser("~/.config/z13-power/lighting.conf")
 BATTERY_PATH = os.path.expanduser("~/.config/z13-power/battery.conf")
 TWEAKS_PATH = os.path.expanduser("~/.config/z13-power/tweaks.conf")
 # Slider range the package will hold. asus-armoury PL1 still tops out at 80 W.
-# The floor is 28 W. Below that the display idle path froze this GZ302.
-CUSTOM_TDP_MIN = 28
+# The floor is 45 W. 10 W, 20 W, and 28 W froze this GZ302.
+CUSTOM_TDP_MIN = 45
 CUSTOM_TDP_MAX = 80
 CUSTOM_TDP_DEFAULT = 75
 CHARGE_LIMIT_PATH = "/sys/class/power_supply/BAT0/charge_control_end_threshold"

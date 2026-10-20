@@ -19,7 +19,7 @@ with a system tray.
 
 **Power**
 - Plug in → Performance. Unplug → Balanced. Low battery → Quiet.
-- Three recipes plus **Custom** (28–80 W slider). Quiet is the firmware **quiet** profile. It does not pin the SMU. The Low preset is gone.
+- Three recipes plus **Custom** (45–80 W slider). Quiet is the firmware **quiet** profile. It does not pin the SMU. The Low preset is gone.
 - Lock a manual pick across plug/unplug. Low battery still forces Quiet, then restores it.
 - Handheld tablet (keyboard off or tablet hinge, no TV) → Quiet. Keyboard-off to a TV keeps high power.
 - Charge limit 40–100%, re-applied at login. One-shot *charge to 100%* for this plug-in only.
@@ -152,8 +152,10 @@ z13ctl's own autoswitch only supports AC/battery.
   desktop. See [Desktop environments](#desktop-environments) below.
 - `ryzen_smu-dkms-git` (amkillam fork) — needed for the Tweaks undervolt.
   The mailbox and `smn` stay root-only. `z13-power-smu` is the only writer.
-  It accepts PPT from 28 W to 80 W (fast up to 93 W) and a curve optimizer
+  It accepts PPT from 45 W to 80 W (fast up to 93 W) and a curve optimizer
   from 0 to −40 mV. It does not accept raw opcodes. Quiet does not call it.
+  Armoury, fans, charge limit, and the lightbar are group `z13-power`, not
+  group `users`.
   The module must rebuild against the running kernel, so install the matching
   `-headers` package (e.g. `linux-cachyos-bore-headers`).
 - `z13gui-bin` is no longer needed: remove it with `paru -Rns z13gui-bin`.
@@ -298,7 +300,7 @@ written to the SMU. asus-armoury is updated too, and clamped to its own
 - **Quiet does not pin the SMU.** Firmware quiet owns that limit. SMU caps
   at 10 W, 20 W, and 28 W, plus a Quiet undervolt, hard-froze this GZ302.
   `lowpower` and a low-battery setting of `lowpower` apply Quiet.
-  The custom slider floors at 28 W.
+  The custom slider floors at 45 W. The helper refuses a package limit under 45 W.
 - **Undervolt is silicon lottery.** Quiet no longer applies one. If a custom
   offset crashes under load, pull the Tweaks slider toward 0.
 - **Don't set per-state power profiles in your desktop's own power manager.**
