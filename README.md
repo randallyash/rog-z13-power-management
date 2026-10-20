@@ -19,7 +19,7 @@ with a system tray.
 
 **Power**
 - Plug in → Performance. Unplug → Balanced. Low battery → Quiet.
-- Three recipes plus **Custom** (28–80 W slider). Quiet is **28 W**, the armoury floor. The Low preset is gone.
+- Three recipes plus **Custom** (28–80 W slider). Quiet is the firmware **quiet** profile. It does not pin the SMU. The Low preset is gone.
 - Lock a manual pick across plug/unplug. Low battery still forces Quiet, then restores it.
 - Handheld tablet (keyboard off or tablet hinge, no TV) → Quiet. Keyboard-off to a TV keeps high power.
 - Charge limit 40–100%, re-applied at login. One-shot *charge to 100%* for this plug-in only.
@@ -64,16 +64,14 @@ with a system tray.
 |------|------|---------|-----------|
 | `performance` | **AC** | 75 / 92 / 93 | reset |
 | `balanced` | **Battery** | 52 / 71 / 70 | reset |
-| `silent` | **Low battery** | 28 / 28 / 28 | −20 mV |
+| `silent` | **Low battery** | firmware quiet | reset |
 | `custom` | manual | 10–80 slider | reset |
 | `lowpower` | retired | same as Quiet | — |
 
-asus-armoury still refuses PL1 below 28 W. That attribute is not what the
-chip follows. This tree writes the requested watts to the SMU after the
-armoury update. On this GZ302 the package holds that limit down to **10 W**
-and no further. Quiet is 28 W. 20 W froze this GZ302 while browsing, and
-10 W and 15 W Low locked it when the panel went idle. The Low preset is
-retired. A request under 10 W is stored and the chip sits near 10 W.
+asus-armoury still refuses PL1 below 28 W. Quiet does not use that path.
+It selects the firmware quiet profile and leaves the package limit alone.
+Pinning the SMU at 10 W, 20 W, or 28 W hard-froze this GZ302, including
+with the panel idle. The Low preset is retired.
 
 `z13-power status` prints the live state. `z13-power settings` opens the window
 (RGB, fan, battery, Tweaks, telemetry).
@@ -296,16 +294,12 @@ written to the SMU. asus-armoury is updated too, and clamped to its own
 
 ## Caveats
 
-- **asus-armoury cannot store PL1 below 28 W.** The SMU can. Quiet is 28 W.
-  The Low preset is removed because 15 W froze this GZ302 the same way 10 W
-  and 20 W did. `lowpower` and a low-battery setting of `lowpower` apply Quiet.
+- **Quiet does not pin the SMU.** Firmware quiet owns that limit. SMU caps
+  at 10 W, 20 W, and 28 W, plus a Quiet undervolt, hard-froze this GZ302.
+  `lowpower` and a low-battery setting of `lowpower` apply Quiet.
   The custom slider floors at 28 W.
-  Below 10 W the limit register changes and the package climbs back to
-  about 10 W.
-- **Undervolt is silicon lottery.** Quiet (`-20` mV) and Low (`-25` mV) were
-  stable on one GZ302. If yours crashes under load, ease off: pull the Tweaks
-  slider toward 0, or change `undervolt=` in those modes (`scripts/z13-power`
-  / `service.conf`) to something milder or `reset`.
+- **Undervolt is silicon lottery.** Quiet no longer applies one. If a custom
+  offset crashes under load, pull the Tweaks slider toward 0.
 - **Don't set per-state power profiles in your desktop's own power manager.**
   On KDE that's System Settings → Power Management → "Performance". On
   Omarchy, `z13-power-omarchy-setup` replaces the bar's Power slot with

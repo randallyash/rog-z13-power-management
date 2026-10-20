@@ -114,8 +114,8 @@ modes:
   performance  performance profile, TDP 75/92/93, fan curve reset, undervolt reset
   custom [W]   TDP slider 10–80 W (default last, else 75)
   max          alias for custom 80 (firmware PL1 max; needs the forced fan floor)
-  silent       balanced profile, TDP 20/20/20, undervolt -20 mV
-  lowpower     balanced profile, TDP 15 W, undervolt -25 mV
+  silent       firmware quiet profile, no SMU cap, undervolt reset
+  lowpower     retired; same as silent
   automatic    return the tray service to Automatic (per power state)
   lock         lock the current manual profile
   unlock       unlock the current profile
@@ -430,11 +430,9 @@ PY
     ;;
   silent)
     require_z13ctl
-    set_profile balanced
-    z13ctl tdp --set 28 --pl2 28 --pl3 28
+    set_profile quiet
     z13ctl fancurve --reset
-    apply_undervolt -20
-
+    reset_undervolt
     ;;
   lowpower)
     # Retired. 15 W sits under the floor that froze this machine.
