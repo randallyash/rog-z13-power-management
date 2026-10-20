@@ -1,0 +1,14 @@
+[Unit]
+Description=z13-power SMU helper socket
+
+[Socket]
+ListenStream=/run/z13-power/smu.sock
+SocketUser=root
+SocketGroup=z13-power
+SocketMode=0660
+Accept=yes
+RuntimeDirectory=z13-power
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=sockets.target

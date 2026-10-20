@@ -20,6 +20,7 @@ import fcntl
 import glob
 import os
 import select
+import socket
 import struct
 import subprocess
 import threading
@@ -28,13 +29,19 @@ from types import SimpleNamespace
 
 from z13_power_io import sys_read, sys_write
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 WMI_PPT = "/sys/devices/platform/asus-nb-wmi"
 ARMOURY = "/sys/class/firmware-attributes/asus-armoury/attributes"
 PROFILE_GLOB = "/sys/class/platform-profile/*/profile"
 CHARGE_PATH = "/sys/class/power_supply/BAT0/charge_control_end_threshold"
 SMU = "/sys/kernel/ryzen_smu_drv"
+SMU_SOCK = "/run/z13-power/smu.sock"
+# Helper policy. Below 28 W froze this GZ302, and PL1 above 80 W is outside
+# the armoury ceiling this machine actually runs. Fast may reach PL3's 93 W.
+SMU_PPT_MIN_W = 28
+SMU_PPT_PL1_MAX_W = 80
+SMU_PPT_FAST_MAX_W = 93
 CO_STATE = os.path.expanduser("~/.local/state/z13-power/co")
 
 # PL1 above this needs --force and a fan floor before the write.
@@ -395,27 +402,53 @@ _ppt_retry: threading.Thread | None = None
 SMU_PPT_RETRY_S = 2.0
 
 
-def _smu_ppt(pl1: int, pl2: int, pl3: int) -> list[str]:
-    """Write the limits the APU follows.
+def parse_smu_request(line: str) -> tuple[str, tuple[int, ...]] | str:
+    """Return (op, args) or an error. No raw opcodes and no smn access."""
+    text = line.strip()
+    if not text or len(text) > 48 or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789- " for c in text):
+        return "bad request"
+    parts = text.split()
+    op = parts[0]
+    if op == "ping" and len(parts) == 1:
+        return ("ping", ())
+    if op == "co" and len(parts) == 2:
+        try:
+            mv = int(parts[1])
+        except ValueError:
+            return "co needs an integer"
+        if not -40 <= mv <= 0:
+            return "undervolt must be 0 to -40"
+        return ("co", (mv,))
+    if op == "ppt" and len(parts) == 4:
+        try:
+            pl1, fast, slow = (int(part) for part in parts[1:])
+        except ValueError:
+            return "ppt needs three integers"
+        if not SMU_PPT_MIN_W <= pl1 <= SMU_PPT_PL1_MAX_W:
+            return f"PL1 {pl1}W is outside {SMU_PPT_MIN_W}–{SMU_PPT_PL1_MAX_W}"
+        if not SMU_PPT_MIN_W <= slow <= SMU_PPT_PL1_MAX_W:
+            return f"slow {slow}W is outside {SMU_PPT_MIN_W}–{SMU_PPT_PL1_MAX_W}"
+        if not SMU_PPT_MIN_W <= fast <= SMU_PPT_FAST_MAX_W:
+            return f"fast {fast}W is outside {SMU_PPT_MIN_W}–{SMU_PPT_FAST_MAX_W}"
+        return ("ppt", (pl1, fast, slow))
+    return "unsupported"
 
-    Sustained power tracks the slow limit, so stapm is set to the same
-    watts. Fast is the boost cap. An armoury write can land on the SMU
-    after this returns; a retry puts the requested watts back.
+
+def _smu_ppt(pl1: int, pl2: int, pl3: int) -> list[str]:
+    """Ask the root helper for the limits the APU follows.
+
+    The mailbox is root-only. Requests under 28 W are refused. Quiet does
+    not call this. A retry covers the EC applying an armoury write late.
     """
     global _ppt_gen, _ppt_retry
-    if not _smu_available():
-        return ["ryzen_smu missing"]
     fast = max(pl2, pl3)
-    targets = (
-        (SMU_STAPM, pl1, "stapm"),
-        (SMU_SLOW, pl1, "slow"),
-        (SMU_FAST, fast, "fast"),
-    )
-    failed = []
-    for cmd, watts, name in targets:
-        code = _smu_command(cmd, watts * 1000)
-        if code != SMU_OK:
-            failed.append(f"{name} {code:#x}" if code is not None else f"{name} no response")
+    line = f"ppt {int(pl1)} {int(fast)} {int(pl1)}"
+    parsed = parse_smu_request(line)
+    if isinstance(parsed, str):
+        return [parsed]
+    if not _smu_available() and not os.path.exists(SMU_SOCK):
+        return ["ryzen_smu missing"]
+    ok, detail = _smu_submit(line)
     with _smu_lock:
         _ppt_gen += 1
         gen = _ppt_gen
@@ -425,17 +458,13 @@ def _smu_ppt(pl1: int, pl2: int, pl3: int) -> list[str]:
         with _smu_lock:
             if gen != _ppt_gen:
                 return
-            for cmd, watts, _name in targets:
-                _smu_mailbox(cmd, watts * 1000)
+        _smu_submit(line)
 
     _ppt_retry = threading.Thread(target=again, daemon=True)
     _ppt_retry.start()
-    if failed:
-        return ["SMU PPT rejected " + ", ".join(failed)]
-    note = f"SMU stapm/slow {pl1}W, fast {fast}W"
-    if pl1 < SMU_PACKAGE_FLOOR_W:
-        note += f"; package still draws about {SMU_PACKAGE_FLOOR_W}W"
-    return [note]
+    if not ok:
+        return [f"SMU PPT rejected ({detail})"]
+    return [f"SMU stapm/slow {pl1}W, fast {fast}W"]
 
 
 def wait_smu_ppt() -> None:
@@ -456,8 +485,12 @@ def _smu_available() -> bool:
 
 
 def _smu_mailbox(cmd: int, arg0: int) -> int | None:
-    """Send one MP1 command. Caller holds _smu_lock."""
-    args = struct.pack("<6I", arg0, 0, 0, 0, 0, 0)
+    """Send one MP1 command. Root only. Caller holds the SMU flock."""
+    if os.geteuid() != 0:
+        return None
+    if cmd not in (SMU_STAPM, SMU_FAST, SMU_SLOW, SMU_CO_ALL):
+        return None
+    args = struct.pack("<6I", arg0 & 0xFFFFFFFF, 0, 0, 0, 0, 0)
     try:
         with open(os.path.join(SMU, "smu_args"), "wb", buffering=0) as fh:
             fh.write(args)
@@ -473,11 +506,89 @@ def _smu_mailbox(cmd: int, arg0: int) -> int | None:
     return struct.unpack("<I", raw)[0]
 
 
-def _smu_command(cmd: int, arg0: int) -> int | None:
+def _smu_flock():
+    os.makedirs("/run/z13-power", mode=0o750, exist_ok=True)
+    fd = os.open("/run/z13-power/smu.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def _smu_apply_root(line: str) -> tuple[bool, str]:
+    """Validate and, as root, perform one request. Does not touch smn."""
+    parsed = parse_smu_request(line)
+    if isinstance(parsed, str):
+        return False, parsed
+    op, args = parsed
+    if op == "ping":
+        return True, "ok"
+    if os.geteuid() != 0:
+        return False, "not root"
     if not _smu_available():
+        return False, "ryzen_smu is not loaded"
+    lock = _smu_flock()
+    try:
+        if op == "co":
+            code = _smu_mailbox(SMU_CO_ALL, _encode_co(args[0]))
+            if code != SMU_OK:
+                return False, f"CO command failed ({code})"
+            return True, "ok"
+        pl1, fast, slow = args
+        for cmd, watts in ((SMU_STAPM, pl1), (SMU_SLOW, slow), (SMU_FAST, fast)):
+            code = _smu_mailbox(cmd, watts * 1000)
+            if code != SMU_OK:
+                return False, f"PPT command failed ({code})"
+        return True, "ok"
+    finally:
+        os.close(lock)
+
+
+def _smu_client(line: str) -> tuple[bool, str]:
+    """Send one request to the root helper. The mailbox stays closed."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as fh:
+            fh.settimeout(3.0)
+            fh.connect(SMU_SOCK)
+            fh.sendall((line.strip() + "\n").encode("ascii"))
+            data = b""
+            while b"\n" not in data and len(data) < 200:
+                chunk = fh.recv(200)
+                if not chunk:
+                    break
+                data += chunk
+    except OSError as exc:
+        return False, f"SMU helper unavailable ({exc.__class__.__name__})"
+    text = data.decode("ascii", "replace").strip()
+    if text == "ok":
+        return True, "ok"
+    if text.startswith("err "):
+        return False, text[4:]
+    return False, text or "empty helper response"
+
+
+def _smu_submit(line: str) -> tuple[bool, str]:
+    if os.geteuid() == 0:
+        return _smu_apply_root(line)
+    return _smu_client(line)
+
+
+def serve_smu_line(line: str) -> str:
+    ok, detail = _smu_apply_root(line)
+    if ok:
+        return "ok"
+    return "err " + detail
+
+
+def _smu_command(cmd: int, arg0: int) -> int | None:
+    """Root mailbox, used only after a policy check. Users go through the socket."""
+    if os.geteuid() != 0 or not _smu_available():
         return None
-    with _smu_lock:
+    if cmd not in (SMU_STAPM, SMU_FAST, SMU_SLOW, SMU_CO_ALL):
+        return None
+    lock = _smu_flock()
+    try:
         return _smu_mailbox(cmd, arg0)
+    finally:
+        os.close(lock)
 
 
 def _remember_co(offset: int) -> None:
@@ -502,12 +613,12 @@ def _set_co(offset: int) -> SimpleNamespace:
         offset = -offset
     if not (-40 <= offset <= 0):
         return result(1, err="undervolt must be 0 to -40")
-    if not _smu_available():
+    if not _smu_available() and not os.path.exists(SMU_SOCK):
         return result(1, err="ryzen_smu is not loaded")
     quiesce_upstream()
-    code = _smu_command(SMU_CO_ALL, _encode_co(offset))
-    if code != SMU_OK:
-        return result(1, err=f"SMU CO command failed ({code})")
+    ok, detail = _smu_submit(f"co {int(offset)}")
+    if not ok:
+        return result(1, err=detail or "SMU CO command failed")
     _remember_co(offset)
     return result(0, out=f"{offset}\n")
 

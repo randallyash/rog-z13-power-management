@@ -150,11 +150,12 @@ z13ctl's own autoswitch only supports AC/battery.
   via an SNI/dbusmenu item; KDE/X11 don't use it)
 - KDE Plasma is not required — the tray service is plain Qt and works on any
   desktop. See [Desktop environments](#desktop-environments) below.
-- `ryzen_smu-dkms-git` (amkillam fork) — **required**. The SMU mailbox is
-  how TDP under the armoury floor and the Tweaks undervolt are applied.
-  It is a DKMS module (not baked into this repo) and must rebuild against
-  your running kernel, so install the matching `-headers` package
-  (e.g. `linux-cachyos-bore-headers`).
+- `ryzen_smu-dkms-git` (amkillam fork) — needed for the Tweaks undervolt.
+  The mailbox and `smn` stay root-only. `z13-power-smu` is the only writer.
+  It accepts PPT from 28 W to 80 W (fast up to 93 W) and a curve optimizer
+  from 0 to −40 mV. It does not accept raw opcodes. Quiet does not call it.
+  The module must rebuild against the running kernel, so install the matching
+  `-headers` package (e.g. `linux-cachyos-bore-headers`).
 - `z13gui-bin` is no longer needed: remove it with `paru -Rns z13gui-bin`.
   An installed `z13ctl-bin` can stay for its udev rules; this app does not run it.
 

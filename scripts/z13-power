@@ -125,7 +125,7 @@ modes:
   settings     open the settings window (lighting, fan curve, battery, power)
   diagnose     check z13 setup (hardware, perms, daemon, modules) and show fixes
   setup-undervolt  install kernel headers for THIS kernel + ryzen_smu (DKMS)
-  version      print z13-power 1.2.0
+  version      print z13-power 1.3.0
   help         show this message
 EOF
 }
@@ -175,6 +175,60 @@ pkg_install() {
   fi
 }
 
+install_smu_helper() {
+  # Mailbox stays root:root 0600. The helper accepts only clamped requests.
+  local src helper
+  src="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0")")" && pwd)"
+  helper=""
+  for helper in \
+      "$src/lock-smu-sysfs" \
+      "$src/../contrib/ryzen-smu/lock-smu-sysfs" \
+      /usr/share/z13-power-management/contrib/ryzen-smu/lock-smu-sysfs \
+      /usr/lib/z13-power/lock-smu-sysfs; do
+    if [[ -f "$helper" ]]; then
+      break
+    fi
+    helper=""
+  done
+  [[ -n "$helper" ]] || die "lock-smu-sysfs is missing"
+  sudo install -d /usr/lib/z13-power /usr/lib/systemd/system
+  sudo install -m755 "$helper" /usr/lib/z13-power/lock-smu-sysfs
+  local smu_bin="" unit_dir=""
+  for smu_bin in \
+      "$src/z13-power-smu" \
+      "$src/../service/z13-power-smu" \
+      /usr/share/z13-power-management/z13-power-smu \
+      /usr/lib/z13-power/z13-power-smu; do
+    [[ -f "$smu_bin" ]] && break
+    smu_bin=""
+  done
+  [[ -n "$smu_bin" ]] || die "z13-power-smu is missing"
+  sudo install -m755 "$smu_bin" /usr/lib/z13-power/z13-power-smu
+  for unit_dir in \
+      "$src" \
+      "$src/../service" \
+      /usr/share/z13-power-management; do
+    if [[ -f "$unit_dir/z13-power-smu.socket" && -f "$unit_dir/z13-power-smu@.service" ]]; then
+      sudo install -m644 "$unit_dir/z13-power-smu.socket" /usr/lib/systemd/system/z13-power-smu.socket
+      sudo install -m644 "$unit_dir/z13-power-smu@.service" /usr/lib/systemd/system/z13-power-smu@.service
+      break
+    fi
+  done
+  if ! getent group z13-power >/dev/null; then
+    sudo groupadd --system z13-power
+  fi
+  local who="${SUDO_USER:-}"
+  if [[ -z "$who" || "$who" == "root" ]]; then
+    who="$(id -un)"
+  fi
+  if [[ -n "$who" && "$who" != "root" ]]; then
+    sudo usermod -aG z13-power "$who"
+  fi
+  sudo /usr/lib/z13-power/lock-smu-sysfs
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now z13-power-smu.socket
+}
+
 setup_undervolt() {
   local kver headers
   kver="$(uname -r)"
@@ -219,13 +273,7 @@ setup_undervolt() {
   done
 
   sudo modprobe ryzen_smu || die "modprobe ryzen_smu failed — is DKMS built for $kver?"
-  if [[ -d /sys/kernel/ryzen_smu_drv ]]; then
-    sudo chmod a+w /sys/kernel/ryzen_smu_drv/smu_args \
-      /sys/kernel/ryzen_smu_drv/rsmu_cmd \
-      /sys/kernel/ryzen_smu_drv/mp1_smu_cmd \
-      /sys/kernel/ryzen_smu_drv/hsmp_smu_cmd \
-      /sys/kernel/ryzen_smu_drv/smn 2>/dev/null || true
-  fi
+  install_smu_helper
   if z13ctl undervolt --get >/dev/null 2>&1; then
     printf '[ OK ] Curve Optimizer ready — Tweaks undervolt will apply\n'
   else
@@ -476,7 +524,7 @@ PY
     diagnose
     ;;
   version|--version)
-    echo "z13-power 1.2.0"
+    echo "z13-power 1.3.0"
     ;;
   setup-undervolt)
     setup_undervolt

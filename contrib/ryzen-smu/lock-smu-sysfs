@@ -1,0 +1,9 @@
+#!/bin/sh
+# Put the ryzen_smu interface back to root-only.
+# The driver does not check who is writing. z13-power-smu is the only writer.
+for n in smu_args rsmu_cmd mp1_smu_cmd hsmp_smu_cmd smn; do
+  f="/sys/kernel/ryzen_smu_drv/$n"
+  [ -e "$f" ] || continue
+  chown root:root "$f" || exit 1
+  chmod 600 "$f" || exit 1
+done

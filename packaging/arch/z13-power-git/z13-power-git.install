@@ -5,6 +5,7 @@
 
 post_install() {
   deploy_armoury_ppt
+  deploy_smu_lock
   enable_service
   guidance
 }
@@ -14,6 +15,7 @@ post_upgrade() {
   # restart to actually deploy the new service code (`enable --now` won't
   # touch an already-running unit).
   deploy_armoury_ppt
+  deploy_smu_lock
   user_cmd systemctl --user daemon-reload
   restart_service
   enable_service
@@ -41,6 +43,20 @@ restart_service() {
 # Runs as root (install hooks do), so no sudo. Fresh udev rules are loaded and
 # the perms are fixed on the already-present device, because the shipped rule
 # only fires on ACTION=="add". Without this, Quiet/20W-lock is a silent no-op.
+deploy_smu_lock() {
+  if ! getent group z13-power >/dev/null 2>&1; then
+    groupadd --system z13-power
+  fi
+  if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+    usermod -aG z13-power "$SUDO_USER" || true
+  fi
+  if [ -x /usr/lib/z13-power/lock-smu-sysfs ]; then
+    /usr/lib/z13-power/lock-smu-sysfs || true
+  fi
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable --now z13-power-smu.socket >/dev/null 2>&1 || true
+}
+
 deploy_armoury_ppt() {
   udevadm control --reload-rules >/dev/null 2>&1 || true
   for a in ppt_pl1_spl ppt_pl2_sppt ppt_pl3_fppt; do
@@ -93,7 +109,7 @@ guidance() {
   Group access:     sudo usermod -aG users "$USER"   (then log out/in)
   Settings window:  z13-power settings   (RGB lighting, fan curve, battery, power)
   Deps:             PyQt6, pyudev, libnotify. z13ctl is not required.
-  SMU:              ryzen_smu-dkms-git for 20 W Quiet, 15 W Low, and undervolt
-  Quiet 20W lock:   armoury PPT udev rule shipped + applied by this install
+  SMU:              root-only mailbox. z13-power-smu clamps PPT and undervolt.
+                    ryzen_smu-dkms-git is optional, for the Tweaks undervolt.
 EOF
 }

@@ -63,6 +63,24 @@ package() {
   # (packaged CLI looks in $src/contrib/ryzen-smu)
   install -Dm644 contrib/ryzen-smu/99-ryzen-smu.rules \
     "$pkgdir/usr/share/z13-power-management/contrib/ryzen-smu/99-ryzen-smu.rules"
+  install -Dm644 contrib/ryzen-smu/99-ryzen-smu.rules \
+    "$pkgdir/usr/lib/udev/rules.d/99-ryzen-smu.rules"
+  install -Dm755 contrib/ryzen-smu/lock-smu-sysfs \
+    "$pkgdir/usr/lib/z13-power/lock-smu-sysfs"
+  install -Dm755 contrib/ryzen-smu/lock-smu-sysfs \
+    "$pkgdir/usr/share/z13-power-management/contrib/ryzen-smu/lock-smu-sysfs"
+  install -Dm755 service/z13-power-smu \
+    "$pkgdir/usr/lib/z13-power/z13-power-smu"
+  install -Dm755 service/z13-power-smu \
+    "$pkgdir/usr/share/z13-power-management/z13-power-smu"
+  install -Dm644 service/z13-power-smu.socket \
+    "$pkgdir/usr/lib/systemd/system/z13-power-smu.socket"
+  install -Dm644 service/z13-power-smu@.service \
+    "$pkgdir/usr/lib/systemd/system/z13-power-smu@.service"
+  install -Dm644 service/z13-power-smu.socket \
+    "$pkgdir/usr/share/z13-power-management/z13-power-smu.socket"
+  install -Dm644 service/z13-power-smu@.service \
+    "$pkgdir/usr/share/z13-power-management/z13-power-smu@.service"
   install -Dm644 contrib/ryzen-smu/ryzen_smu.conf \
     "$pkgdir/usr/share/z13-power-management/contrib/ryzen-smu/ryzen_smu.conf"
   # armoury firmware-attributes PPT udev rule — without it the Quiet 20W lock
